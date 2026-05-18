@@ -1,0 +1,12 @@
+# Claude
+.claude
+CLAUDE.md
+
+# Ignore files
+
+# Ignore directories
+.venv
+.git
+__pycache__
+logs
+data

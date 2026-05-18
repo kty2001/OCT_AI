@@ -1,0 +1,7 @@
+[project]
+name = "oct-ai"
+version = "0.1.0"
+description = "AI-Based Treatment of Periodontal Diseases in OCT"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
