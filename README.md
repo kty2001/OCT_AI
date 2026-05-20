@@ -7,8 +7,8 @@
 - OCT란
 - 오픈 데이터 탐색
 - 스페클 노이즈 제거 방식
-- super-resolution 이용한 해상도 증가
 - OCT와 결합하여 성능을 높이는 모달리티 탐색
+- super-resolution 이용한 해상도 증가
 
 
 ### OCT란

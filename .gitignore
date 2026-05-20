@@ -10,4 +10,4 @@ CLAUDE.md
 __pycache__
 logs
 data/*
-!data/README.md
+!data/data_description.md
