@@ -4,4 +4,8 @@ version = "0.1.0"
 description = "AI-Based Treatment of Periodontal Diseases in OCT"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "medsegbench>=1.0.0",
+    "numpy>=2.4.5",
+    "pillow>=12.2.0",
+]
