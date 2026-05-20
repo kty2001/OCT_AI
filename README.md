@@ -1,7 +1,7 @@
 # AI 기반 OCT 치주질환 처리
 
 ## TODO 리스트
-[ ] 자료 조사
+[] 자료 조사
 
 ## 자료 조사
 - OCT란
@@ -40,8 +40,7 @@ $$\Delta z = \frac{2\ln 2}{\pi} \cdot \frac{\lambda_0^2}{\Delta \lambda}$$
 - https://brunch.co.kr/@gazezaet/2
 - https://www.amc.seoul.kr/asan/healthinfo/management/managementDetail.do?managementId=417
 
-A Scan: 깊이 면 단일 데이터(1차원)
-B Scan: 연속된 A Scan 데이터(2차원)
+A Scan: 깊이 면 단일 데이터(1차원) / B Scan: 연속된 A Scan 데이터(2차원)
 
 ### 오픈 데이터 탐색
 

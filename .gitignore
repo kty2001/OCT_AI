@@ -9,4 +9,5 @@ CLAUDE.md
 .git
 __pycache__
 logs
-data
+data/*
+!data/README.md
