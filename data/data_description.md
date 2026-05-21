@@ -3,6 +3,18 @@
 `data/` 디렉토리에 저장된 데이터셋 목록
 NAS의 dataset/OCT 폴더 확인
 
+---
+
+## 데이터셋 요약
+
+| 데이터셋 | 모달리티 | 이미지 수 | 태스크 | noisy-clean 쌍 |
+|---------|---------|---------|--------|---------------|
+| Kermany OCT2017 | 망막 OCT | 84,484 | 분류 | 없음 |
+| AROI | 망막 OCT | 3,072 (주석 1,136) | 레이어 세그멘테이션 | 없음 |
+| MedSegBench / cystoidfluid | 망막 OCT | 1,006 | 유체 세그멘테이션 | 없음 |
+| MedSegBench / wbc | 현미경 | 400 | 세포 세그멘테이션 | 없음 |
+| MedSegBench / yeaz | 현미경 | 707 | 세포 세그멘테이션 | 없음 |
+| SBSDI (D1) | 망막 OCT | synthetic 18쌍 + real 39세트 | 디노이징 + SR | 있음 (synthetic) |
 
 ---
 
@@ -223,12 +235,108 @@ labels = data["train_label"]    # shape: (N, H, W)
 
 ---
 
-## 데이터셋 요약
+## 4. SBSDI (Fang et al., 2013 IEEE TMI) — D1 데이터셋
 
-| 데이터셋 | 모달리티 | 이미지 수 | 태스크 | 노이즈 쌍 |
-|---------|---------|---------|--------|---------|
-| Kermany OCT2017 | 망막 OCT | 84,484 | 분류 | 없음 |
-| AROI | 망막 OCT | 3,072 (주석 1,136) | 레이어 세그멘테이션 | 없음 |
-| MedSegBench / cystoidfluid | 망막 OCT | 1,006 | 유체 세그멘테이션 | 없음 |
-| MedSegBench / wbc | 현미경 | 400 | 세포 세그멘테이션 | 없음 |
-| MedSegBench / yeaz | 현미경 | 707 | 세포 세그멘테이션 | 없음 |
+| 항목 | 내용 |
+|------|------|
+| 경로 | `data/Final_Publication_2013_SBSDI/` |
+| 출처 | [Fang et al., IEEE TMI 2013](https://ieeexplore.ieee.org/document/6553142) |
+| 장비 | Bioptigen SDOCT (axial resolution 4.5 µm/pixel) |
+| 대상 | 인간 망막 (Normal, AMD), 마우스 망막 |
+| 이미지 포맷 | TIFF, 그레이스케일(L) |
+| 라이선스 | 학술 연구 목적 한정, Duke University © 2013 |
+| 문의 | fangleyuan@gmail.com |
+
+OCT 디노이징 논문에서 **D1** 이라는 이름으로 자주 인용되는 noisy-clean 쌍 데이터셋입니다. SBSDI(Sparsity Based Simultaneous Denoising and Interpolation) 알고리즘 검증용으로 공개되었으며, MATLAB 코드와 사전학습 딕셔너리를 함께 포함합니다.
+
+### 구성 세트
+
+#### 4-1. For synthetic experiments (D1 핵심 — 18 noisy-clean 쌍)
+
+| 항목 | 내용 |
+|------|------|
+| 경로 | `For synthetic experiments/1/` ~ `/18/` |
+| 데이터 수 | 18개 폴더 (Normal + AMD 인간 피험자) |
+| 이미지 크기 | 900×450 px |
+| noisy | `test.tif` — 단일 저SNR B-scan |
+| clean | `average.tif` — 다중 프레임 평균 레퍼런스 |
+| 인접 슬라이스 | `1.tif` ~ `4.tif` — 인접 4장 B-scan (N2N 학습용) |
+| 태스크 | 디노이징 + SR 동시 (2×, 4× 업스케일) |
+
+```
+For synthetic experiments/
+├── 1/
+│   ├── test.tif       ← noisy 입력 (900×450)
+│   ├── average.tif    ← clean 레퍼런스 (900×450)
+│   ├── 1.tif          ← 인접 슬라이스
+│   ├── 2.tif
+│   ├── 3.tif
+│   └── 4.tif
+├── 2/ ... 18/
+```
+
+#### 4-2. For real experiments on Humans (39세트, 실제 저해상도 스캔)
+
+| 항목 | 내용 |
+|------|------|
+| 경로 | `For real experiments on Humans/1/` ~ `/39/` |
+| 구성 | 13개 피험자 × 3개 위치(중심와, 상·하) = 39 폴더 |
+| 이미지 크기 | 450×450 px |
+| 파일 | `test.tif` (noisy 입력) + 인접 슬라이스 `1~4.tif` |
+| clean 레퍼런스 | **없음** — 비지도/자가지도 학습에 적합 |
+| 태스크 | 순수 디노이징 (SR 불필요) |
+
+#### 4-3. For real experiments on Mouse (1개 마우스, 3가지 다운샘플 조건)
+
+| 항목 | 내용 |
+|------|------|
+| 경로 | `For real experiments on Mouse/One time|Two time|Four time/` |
+| 이미지 크기 | 1000×450 px |
+| 조건 | 1×(원본), 2×, 4× 다운샘플 |
+| 비교 결과 | `BM3D+Bicubic.tif`, `SBSDI_3D.tif` 포함 |
+| 태스크 | SR 성능 비교 |
+
+#### 4-4. Images for Dictionaries and Mapping learning (딕셔너리 학습용)
+
+| 항목 | 내용 |
+|------|------|
+| 경로 | `Images for Dictionaries and Mapping leraning/` |
+| 파일 | `HH1.tif`~`HH10.tif` (고품질) + `LL1.tif`~`LL10.tif` (저품질) |
+| 이미지 크기 | 900×450 px |
+| 용도 | SBSDI 딕셔너리 쌍 학습용. 자체 딕셔너리 재학습 시 사용 |
+
+### MATLAB 코드 구성 (루트)
+
+| 파일 | 역할 |
+|------|------|
+| `Demo_SBSDI_mex.m` | 메인 데모 (권장) |
+| `Dictionary_Mapping_Training.m` | 딕셔너리 쌍 학습 |
+| `Test_all_synthtic.m` | 18개 synthetic 전체 테스트 (2×) |
+| `Test_all_sythetic_fourtimes.m` | 18개 synthetic 전체 테스트 (4×) |
+| `Test_all_real.m` | 실제 Human 데이터 전체 테스트 |
+| `*.mat` | 사전학습된 딕셔너리 및 매핑 모델 |
+
+### 데이터 로드 (Python)
+
+```python
+from PIL import Image
+import numpy as np
+
+# noisy-clean 쌍 로드 (synthetic 세트 기준)
+noisy = np.array(Image.open("data/Final_Publication_2013_SBSDI/For synthetic experiments/1/test.tif"))
+clean = np.array(Image.open("data/Final_Publication_2013_SBSDI/For synthetic experiments/1/average.tif"))
+# shape: (450, 900), dtype: uint8, grayscale
+
+# 인접 슬라이스 로드 (N2N 학습용)
+adjacent = [np.array(Image.open(
+    f"data/Final_Publication_2013_SBSDI/For synthetic experiments/1/{i}.tif"
+)) for i in range(1, 5)]
+```
+
+### 특이사항
+
+- **D1 정의**: 디노이징 논문에서 "D1"은 `For synthetic experiments`의 18 noisy-clean 쌍을 지칭
+- clean 레퍼런스(`average.tif`)는 동일 위치 다중 프레임을 평균내어 생성한 것으로 완전한 GT는 아님
+- `For real experiments on Humans`에는 clean 레퍼런스 없음 → 비지도·자가지도 학습 전용
+- 인접 슬라이스 4장이 제공되므로 **Noise2Noise 학습 전략**에 바로 활용 가능
+- MATLAB 코드 포함이지만 `.p` 파일(컴파일된 코드)은 Windows 64-bit 전용
