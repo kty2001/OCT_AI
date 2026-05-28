@@ -5,7 +5,22 @@ description = "AI-Based Treatment of Periodontal Diseases in OCT"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "bm3d>=4.0.3",
+    "matplotlib>=3.10.9",
     "medsegbench>=1.0.0",
     "numpy>=2.4.5",
+    "pandas>=3.0.3",
     "pillow>=12.2.0",
+    "scikit-image>=0.26.0",
+    "scipy>=1.17.1",
+    "torch",
+    "tqdm>=4.67.3",
 ]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }

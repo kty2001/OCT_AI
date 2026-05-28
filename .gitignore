@@ -11,3 +11,5 @@ __pycache__
 logs
 data/*
 !data/data_description.md
+results/*
+!results/result_description.md
