@@ -575,6 +575,151 @@ uv run python scripts/07_dncnn/run_dncnn.py
 
 ---
 
+## 8단계: NAFNet 백본 교체 (6-fold CV, from scratch)
+
+### 개요
+
+DnCNN / U-Net과 동일한 6-fold CV 프레임워크에서 백본을 NAFNet으로 교체. 아키텍처 효과 측정.
+
+- **모델**: NAFNet-width32 (~17M params)
+- **초기 가중치**: 없음 (from scratch)
+- **특이사항**: Fold 1은 batch=16 기존 결과 재사용, Fold 2~6은 batch=32로 학습
+- **스크립트**: `scripts/08_nafnet/run_nafnet.py`
+- **결과 파일**:
+  - `results/08_nafnet/checkpoints/fold_{k}/best.pth`
+  - `results/08_nafnet/metrics/fold_{k}/per_image.csv`
+  - `results/08_nafnet/metrics/summary.csv`
+  - `results/08_nafnet/images/fold_{k}/`
+
+### 모델 구조
+
+| 구성 요소 | 내용 |
+|----------|------|
+| 인코더 | 4 스테이지, enc_blks=[1,1,1,28], 각 스테이지 후 stride-2 Conv 다운샘플 |
+| 병목 | NAFBlock x1 |
+| 디코더 | 4 스테이지, dec_blks=[1,1,1,1], PixelShuffle 업샘플 |
+| skip | 인코더-디코더 대응 스테이지 덧셈 |
+| global residual | 출력 = 네트워크(입력) + 입력 |
+| 핵심 블록 | SimpleGate + SCA(채널 어텐션) + LayerNorm2d, 활성화 함수 없음 |
+| 파라미터 수 | 17,112,673 |
+
+### 학습 설정
+
+| 항목 | 설정 | 비교 (DnCNN) |
+|------|------|-------------|
+| 손실 함수 | L1 + 0.1*(1-SSIM) | 동일 |
+| 옵티마이저 | AdamW (lr=1e-3, wd=1e-4) | Adam (lr=1e-3) |
+| Scheduler | CosineAnnealing | 동일 |
+| Grad clip | norm=1.0 | 없음 |
+| 배치 크기 | 32 (Fold 1: 16) | 64 |
+| Early stopping | patience=30 | 동일 |
+| Augment | H/V flip + rot90 | H/V flip |
+| 총 학습 시간 | 123분 (RTX A4000) | 355분 |
+
+### 조기 종료 결과 (fold별)
+
+| Fold | 평가 쌍 | 종료 에포크 | best val PSNR | best val SSIM |
+|------|---------|-----------|--------------|--------------|
+| 1 | 1, 7, 13 | 36 (재사용) | 28.2780 | 0.6819 |
+| 2 | 2, 8, 14 | 39 | **29.9704** | **0.6985** |
+| 3 | 3, 9, 15 | 32 | 26.6745 | 0.6600 |
+| 4 | 4, 10, 16 | 34 | 29.0099 | 0.6811 |
+| 5 | 5, 11, 17 | 33 | 26.5474 | 0.6584 |
+| 6 | 6, 12, 18 | 46 | 28.2139 | 0.6834 |
+
+### 성능 결과 (SBSDI D1, 18쌍 6-fold 평균)
+
+| 방법 | PSNR (dB) | SSIM | CNR |
+|------|-----------|------|-----|
+| SRAD (베이스라인) | 27.50 +- 1.98 | 0.652 +- 0.023 | **1.220 +- 0.121** |
+| 6단계-B (U-Net, ES) | **28.19 +- 2.56** | **0.6814 +- 0.031** | 1.169 +- 0.121 |
+| 7단계 (DnCNN, ES) | 28.17 +- 2.47 | 0.6732 +- 0.032 | 1.167 +- 0.127 |
+| **8단계 (NAFNet-32, ES)** | 28.11 +- 2.26 | 0.6743 +- 0.029 | **1.183 +- 0.120** |
+
+### 분석
+
+- **PSNR 28.11**: SRAD(27.50) 초과. U-Net(28.19)보다 0.08 dB 낮음 -- 사실상 동등.
+- **SSIM 0.6743**: SRAD(0.652) 초과. U-Net(0.6814)보다 약간 낮음.
+- **CNR 1.183**: 세 AI 아키텍처 중 최고. U-Net(1.169), DnCNN(1.167)보다 높음.
+- **분산 최소**: std=2.26 -- U-Net(2.56), DnCNN(2.47)보다 fold 간 편차가 작음.
+- **학습 시간**: 123분 -- DnCNN(355분) 대비 대폭 단축.
+- **핵심 결론**: 667K(DnCNN) ≈ 1.95M(U-Net) ≈ 17M(NAFNet) -- 3번 연속 데이터 병목 확인.
+  - 파라미터 수 25배 차이에도 PSNR 차이 0.08 dB 이내.
+  - 18쌍 데이터 크기가 아키텍처 차이를 완전히 압도함.
+
+### 재실행 명령
+
+```bash
+uv run python scripts/08_nafnet/run_nafnet.py
+
+# 특정 fold부터 재시작
+uv run python scripts/08_nafnet/run_nafnet.py --start-fold 3
+```
+
+---
+
+## 9단계: 다중 노이즈 재실현 증강 + NAFNet (6-fold CV)
+
+### 개요
+
+8단계에서 데이터 병목이 확인됐다. 18개 clean GT에 노이즈 모델(L=5.266, sigma_a=0.010)로 K=4개씩 합성 noisy를 추가 생성하여 학습 데이터를 5배로 늘렸다. 평가는 real noisy로만 수행하여 8단계와 동등한 조건을 유지한다.
+
+- **증강 데이터**: `data/Final_Publication_2013_SBSDI/augmented_noisy/` (72장, 18 sets × K=4)
+- **스크립트**: `scripts/09_augment/run_nafnet_aug.py`
+- **결과 파일**:
+  - `results/09_nafnet_aug/checkpoints/fold_{k}/best.pth`
+  - `results/09_nafnet_aug/metrics/fold_{k}/per_image.csv`
+  - `results/09_nafnet_aug/metrics/summary.csv`
+
+### 학습 설정
+
+| 항목 | 9단계 | 8단계 비교 |
+|------|-------|-----------|
+| 모델 | NAFNet-width32 (17M) | 동일 |
+| 학습 쌍/fold | 15 sets × 5 = 75쌍 | 15쌍 |
+| 평가 쌍/fold | 3쌍 (real only) | 동일 |
+| 패치/fold | 20,625 | 4,125 (5배 증가) |
+| 배치 크기 | 48 | 32 |
+| Steps/epoch | 425 | ~129 |
+| Early stopping | patience=30 | 동일 |
+
+### 폴드별 결과
+
+| Fold | 평가 이미지 | best val PSNR | best val SSIM | stopped epoch |
+|------|-----------|--------------|--------------|--------------|
+| 1 | 1, 7, 13 | 28.3362 | 0.6856 | 33 |
+| 2 | 2, 8, 14 | **30.7966** | **0.7130** | 34 |
+| 3 | 3, 9, 15 | 26.7262 | 0.6660 | 31 |
+| 4 | 4, 10, 16 | 29.2315 | 0.6885 | 32 |
+| 5 | 5, 11, 17 | 26.6671 | 0.6664 | ~31 |
+| 6 | 6, 12, 18 | 28.3153 | 0.6888 | ~34 |
+
+### 성능 결과 (SBSDI D1, 18쌍 6-fold 평균)
+
+| 방법 | PSNR (dB) | SSIM | CNR |
+|------|-----------|------|-----|
+| SRAD (베이스라인) | 27.50 +- 1.98 | 0.652 +- 0.023 | **1.220 +- 0.121** |
+| 8단계 (NAFNet-32, ES) | 28.11 +- 2.26 | 0.6743 +- 0.029 | 1.183 +- 0.120 |
+| **9단계 (NAFNet+Aug, K=4)** | **28.35 +- 2.56** | **0.6832 +- 0.032** | 1.168 +- 0.121 |
+
+### 분석
+
+- **PSNR +0.24 dB**: 학습 데이터 5배 증가의 효과. 데이터 병목을 부분적으로 완화.
+- **SSIM +0.009**: 노이즈 다양성 증가로 일반화 소폭 향상.
+- **CNR -0.015**: 합성 노이즈가 실제 스페클과 완전히 동일하지 않아 대비 보존 측면에서 미미하게 하락. 오차 범위 내 차이.
+- **학습 수렴 속도 동등**: early stop epoch 31~34로 8단계(32~46)와 유사. 에폭당 데이터는 5배 많으나 수렴 epoch 수는 비슷.
+- **결론**: K=4 재실현 증강은 PSNR/SSIM에 유효하나 CNR 한계는 해소되지 않음. 근본적 돌파를 위해서는 외부 real OCT 데이터 확보가 필요.
+
+### 재실행 명령
+
+```bash
+uv run python scripts/09_augment/run_nafnet_aug.py --batch-size 48
+# 특정 fold 범위만 재실행
+uv run python scripts/09_augment/run_nafnet_aug.py --start-fold 5 --end-fold 5
+```
+
+---
+
 ## 전체 방법 비교 (SBSDI D1, 18쌍 평균)
 
 | 방법 | PSNR (dB) | SSIM | CNR | 비고 |
@@ -589,7 +734,9 @@ uv run python scripts/07_dncnn/run_dncnn.py
 | Real-ESRGAN x4 | 27.57 +- 2.40 | 0.673 +- 0.034 | 1.166 +- 0.117 | SR 포함 |
 | 6-fold CV (U-Net, batch=16) | 27.21 +- 2.41 | 0.6822 +- 0.032 | 1.164 +- 0.113 | real clean GT, 미수렴 |
 | **6-fold CV (U-Net, ES)** | **28.19 +- 2.56** | **0.6814 +- 0.031** | 1.169 +- 0.121 | real clean GT, SRAD 초과 |
-| **7단계 (DnCNN, ES)** | 28.17 +- 2.47 | 0.6732 +- 0.032 | 1.167 +- 0.127 | from scratch, U-Net과 동등 |
+| 7단계 (DnCNN, ES) | 28.17 +- 2.47 | 0.6732 +- 0.032 | 1.167 +- 0.127 | from scratch, U-Net과 동등 |
+| 8단계 (NAFNet-32, ES) | 28.11 +- 2.26 | 0.6743 +- 0.029 | **1.183 +- 0.120** | from scratch, CNR 최고 |
+| **9단계 (NAFNet+Aug, K=4)** | **28.35 +- 2.56** | **0.6832 +- 0.032** | 1.168 +- 0.121 | 증강 5배, PSNR/SSIM 최고 |
 
 ---
 
@@ -606,3 +753,73 @@ uv run python scripts/07_dncnn/run_dncnn.py
 | 6단계-A | 6-fold CV 지도학습 (U-Net, batch=16, ep=150) | 완료 |
 | 6단계-B | 6-fold CV 지도학습 (U-Net, batch=64, early stopping) | 완료 — SRAD 초과 |
 | 7단계 | DnCNN 백본 6-fold CV (from scratch) | 완료 — U-Net과 동등, 데이터 병목 확인 |
+| 8단계 | NAFNet 백본 6-fold CV (width=32, from scratch) | 완료 — CNR 최고, 데이터 병목 재확인 |
+| 9단계 | 다중 노이즈 재실현 증강 (K=4) + NAFNet 6-fold CV | 완료 — PSNR/SSIM 소폭 향상, CNR 한계 미해소 |
+
+---
+
+## 향후 작업 방향
+
+### 실험 총괄 결론
+
+8단계까지의 실험에서 도출된 핵심 사실:
+
+1. **데이터가 주된 병목**: U-Net(1.95M) / DnCNN(667K) / NAFNet(17M) 모두 PSNR 28.1~28.2 dB로 수렴. K=4 재실현 증강으로 28.35 dB까지 향상됐으나 효과는 소폭(+0.24 dB). 더 다양한 실제 OCT 데이터가 필요.
+2. **clean GT가 결정적**: N2N(noisy 타겟, loss floor 0.184) → k-fold CV(clean GT, loss floor 0.048)로 전환하자 PSNR이 26.84 → 28.19 dB로 도약.
+3. **CNR 한계**: 어떤 AI 방법도 SRAD CNR(1.220)을 초과하지 못함. 현재 최고 NAFNet 1.183.
+4. **합성 데이터 한계 확인**: 합성 노이즈(Gamma) 지도학습 PSNR 22.43 — 실제 OCT 스페클과의 도메인 갭이 모든 학습을 무효화.
+
+### 개선 방향 상세 분석
+
+#### 방향 1 — 데이터 증강 강화 (진행 중 / 부분 완료)
+
+**완료**: K=4 다중 노이즈 재실현 (9단계) — PSNR +0.24 dB, SSIM +0.009.
+적용 중: H/V flip, rot90.
+추가 가능한 공간적 증강:
+
+| 증강 | 기대 효과 | 난이도 |
+|------|---------|-------|
+| Elastic deformation | fold 간 분산 감소 | 낮음 |
+| Random brightness/contrast | 조도 변화 대응 | 낮음 |
+| Mixup (noisy-clean 쌍 간) | 결정 경계 부드럽게 | 낮음 |
+| Test-Time Augmentation (TTA) | 추론 시 분산 감소 | 낮음 |
+| CutMix | 지역별 노이즈 패턴 다양화 | 중간 |
+
+9단계 결과: 노이즈 재실현 증강의 효과는 PSNR +0.24 dB로 제한적. CNR 한계는 공간적 증강으로도 해소 어려울 것으로 예상.
+
+#### 방향 2 — 손실 함수 개선 (우선순위: 높음, 비용: 낮음)
+
+CNR이 SRAD(1.220) 대비 현재 최고 1.183으로 미달 중. CNR은 조직 경계 대비를 측정하므로, 경계 보존에 특화된 손실이 필요.
+
+| 손실 항목 | 내용 | CNR 기대 효과 |
+|----------|------|-------------|
+| Edge loss (Sobel) | 경계 픽셀 가중치 강화 | 직접적 CNR 향상 |
+| Frequency loss (FFT) | 고주파 성분 보존 | 구조 선명도 향상 |
+| Perceptual loss (VGG) | 구조 유사성 강화 | 간접적 CNR 향상 |
+| CNR-aware loss | ROI 기반 대비 직접 최적화 | 가장 직접적이나 구현 복잡 |
+
+현재 L1 + 0.1*(1-SSIM) 조합에 Edge loss 또는 Frequency loss 항을 추가하는 것이 가장 간단하고 효과적.
+
+#### 방향 3 — 외부 OCT 데이터 추가 (우선순위: 높음, 비용: 높음)
+
+18쌍 → 50쌍 이상으로 늘어나면 아키텍처 차이가 의미를 가지기 시작할 것으로 예상.
+clean GT 보유 OCT 데이터셋:
+
+| 데이터셋 | 쌍 수 | 접근 방법 | 상태 |
+|---------|------|---------|------|
+| PKU37 | 37쌍 | 알리바바 클라우드 계정 | 접근 실패 |
+| RETOUCH | 112 볼륨 | Grand Challenge 계정 | 접근 실패 |
+| Sub2Full vis-OCT | 미공개 | 저자 컨택 | 미시도 |
+| ODTiD | 242장 | OPENICPSR 계정 | 접근 실패 |
+
+계정 발급 재시도 또는 저자 직접 컨택이 현실적인 방법.
+
+#### 방향 4 — 치주 OCT 데이터 확보 (우선순위: 높음, 비용: 매우 높음)
+
+최종 목표 도메인. 현재 모든 학습은 망막 OCT 기반으로, 치주 도메인 전이 성능은 미검증.
+- 촬영 프로토콜: 교수님과 협의 필요
+- 촬영 후 필요한 작업: 다중 프레임 평균으로 clean GT 생성, 현재 최고 모델로 전이학습 적용
+
+#### 방향 5 — Super-Resolution (우선순위: 낮음, 장기)
+
+스페클 제거 성능이 충분히 향상된 후 적용. Real-ESRGAN x4(PSNR 27.57)가 이미 SRAD를 소폭 초과하므로, 스페클 제거 + SR 파이프라인 조합이 가장 높은 최종 품질을 기대할 수 있음.

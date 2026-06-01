@@ -19,6 +19,8 @@ OCT(Optical Coherence Tomography)를 활용한 치주질환 탐지·예측 연�
 | 6단계-A | 6-fold CV 지도학습 (U-Net, batch=16, ep=150) | 완료 |
 | 6단계-B | 6-fold CV 지도학습 (U-Net, batch=64, early stopping, patience=30) | 완료 — SRAD 초과 |
 | 7단계 | DnCNN 백본 6-fold CV (depth=20, from scratch) | 완료 — U-Net과 동등, 데이터 병목 확인 |
+| 8단계 | NAFNet 백본 6-fold CV (width=32, from scratch) | 완료 — DnCNN/U-Net과 동등, 데이터 병목 재확인 |
+| 9단계 | 다중 노이즈 재실현 증강 (K=4) + NAFNet 6-fold CV | 완료 — PSNR/SSIM 소폭 향상 (+0.24 dB) |
 
 ---
 
@@ -264,26 +266,16 @@ uv run python scripts/04_sr_test/test_sr.py       # 단일 이미지
 uv run python scripts/04_sr_test/eval_sr_full.py  # 18쌍 전체 평가
 ```
 
-### 현재 병목 요인
+### 병목 분석 (4단계 시점 진단 → 6~8단계 실험으로 검증)
 
-| 문제 | 원인 | 영향 |
-|------|------|------|
-| 학습 루프에 clean GT 없음 | N2N/Fine-tune 모두 noisy 타겟 사용 — 이론적 상한이 프레임 평균 품질 | 딥러닝이 SRAD를 유의미하게 초과하지 못하는 근본 원인 |
-| real clean GT 18쌍 미활용 | SBSDI D1 18쌍을 평가 전용으로만 사용 | 실제 OCT 스페클에 대한 지도학습 불가 |
-| 모델 capacity 부족 | 경량 U-Net ~1.95M params | 표현력 한계 |
-| 지도학습 도메인 갭 | 합성 Gamma 노이즈 ≠ 실제 OCT 스페클 | 합성 지도학습 전 지표 최하위 |
+| 가설 | 진단 시점 판단 | 실험 후 결론 |
+|------|-------------|------------|
+| 학습 루프에 clean GT 없음 | 근본 원인 | **확인** — k-fold CV로 해소 후 SRAD 초과 |
+| real clean GT 18쌍 미활용 | 핵심 병목 | **확인** — 6단계-B에서 PSNR +0.98 dB |
+| 모델 capacity 부족 | 의심 요인 | **기각** — DnCNN 667K = U-Net 1.95M = NAFNet 17M |
+| 지도학습 도메인 갭 | 확인된 문제 | **확인** — 합성 지도학습 최하위(PSNR 22.43) |
 
-### 다음 방향 (스페클 노이즈 제거 집중)
-
-딥러닝이 SRAD 대비 유의미한 성능을 내지 못하는 근본 원인은 clean GT 없이 학습하는 구조에 있다. 이를 해결하기 위해 두 방향을 병행한다.
-
-| 방향 | 방법 | 핵심 내용 | 기대 PSNR |
-|------|------|---------|---------|
-| **A** | **SBSDI D1 k-fold 지도학습** | 18쌍을 k-fold cross-validation으로 학습에 활용 — 실제 OCT clean GT로 노이즈 바닥 해소 | 29~31 dB |
-| **B** | **백본 교체 (DnCNN / NAFNet)** | 1.95M U-Net → 5~10M 수준의 강력한 아키텍처로 capacity 확장 | A 방향과 병행 적용 |
-| 장기 | **치주 OCT 데이터 확보** | 교수님과 촬영 프로토콜 논의, 전이 성능 정량 평가 | — |
-
-> SR은 완성도 높은 기존 모델이 다수 존재하므로 이후 단계에서 적용 예정. 현재는 스페클 노이즈 제거 성능 향상에 집중한다.
+방향 A(k-fold 지도학습)와 방향 B(백본 교체)는 6~8단계에서 모두 완료. 상세 결과는 종합 결과 비교 및 향후 작업 방향 참조.
 
 ---
 
@@ -340,6 +332,107 @@ uv run python scripts/05_finetune/run_finetune.py --eval-only
 
 ---
 
+## 6단계: 6-fold CV 지도학습 — U-Net + real clean GT (완료)
+
+SBSDI D1 18쌍을 k=6 fold로 나눠 real clean GT로 지도학습. 방향 A(clean GT 활용) 효과 단독 측정.
+
+- **스크립트**: `scripts/06_kfold/run_kfold.py`
+- **결과**: `results/06_kfold/`
+
+| 설정 | 6단계-A | 6단계-B |
+|------|---------|---------|
+| 배치 / 에포크 | 16 / 150 | **64 / 500** |
+| Early stopping | 없음 | **patience=30** |
+| 학습 시간 | 175분 | **47분** |
+| PSNR | 27.21 | **28.19** |
+| SSIM | 0.6822 | 0.6814 |
+
+- **6단계-B 핵심**: AI 방법 최초로 SRAD(27.50) 초과. early stopping이 과적합 방지와 수렴 동시 해결
+- loss floor 0.048 달성 (N2N 0.184, 합성 지도학습 0.022 대비 real clean GT 효과 확인)
+
+실행:
+```bash
+uv run python scripts/06_kfold/run_kfold.py
+```
+
+---
+
+## 7단계: DnCNN 백본 교체 (완료)
+
+동일한 6-fold CV 프레임워크에서 U-Net → DnCNN-B(depth=20, ch=64) 교체. 방향 B(아키텍처) 효과 측정.
+
+- **스크립트**: `scripts/07_dncnn/run_dncnn.py`
+- **결과**: `results/07_dncnn/`
+
+| 항목 | 값 |
+|------|---|
+| 파라미터 수 | 667,073 (U-Net 1.95M 대비 1/3) |
+| 초기 가중치 | from scratch |
+| 학습 시간 | 355분 |
+| PSNR | 28.17 ± 2.47 |
+| SSIM | 0.6732 ± 0.032 |
+
+- **핵심 발견**: 667K DnCNN ≈ 1.95M U-Net — 모델 크기가 병목이 아님
+
+실행:
+```bash
+uv run python scripts/07_dncnn/run_dncnn.py
+```
+
+---
+
+## 8단계: NAFNet 백본 교체 (완료)
+
+동일한 6-fold CV 프레임워크에서 NAFNet-width32(~17M params) 적용. SimpleGate + SCA + LayerNorm 구조.
+
+- **스크립트**: `scripts/08_nafnet/run_nafnet.py`
+- **결과**: `results/08_nafnet/`
+
+| 항목 | 값 |
+|------|---|
+| 파라미터 수 | 17,112,673 |
+| 초기 가중치 | from scratch |
+| 학습 시간 | 123분 |
+| PSNR | 28.11 ± 2.26 |
+| SSIM | 0.6743 ± 0.029 |
+| CNR | **1.183** (3개 아키텍처 중 최고) |
+
+- **핵심 발견**: 17M NAFNet ≈ 1.95M U-Net ≈ 667K DnCNN — 데이터 병목 3번 연속 확인
+
+실행:
+```bash
+uv run python scripts/08_nafnet/run_nafnet.py
+# 특정 fold부터 재시작
+uv run python scripts/08_nafnet/run_nafnet.py --start-fold 2
+```
+
+---
+
+## 9단계: 다중 노이즈 재실현 증강 + NAFNet (완료)
+
+18개 clean GT에 노이즈 모델(L=5.266)로 K=4개 합성 noisy를 추가 생성. 학습 데이터 5배 증가(15쌍 → 75쌍/fold). 평가는 real noisy로만 수행.
+
+- **스크립트**: `scripts/09_augment/run_nafnet_aug.py`
+- **증강 데이터**: `data/Final_Publication_2013_SBSDI/augmented_noisy/`
+- **결과**: `results/09_nafnet_aug/`
+
+| 항목 | 값 |
+|------|---|
+| 학습 쌍/fold | 75 (real 15 + aug 60) |
+| 배치 크기 | 48 |
+| PSNR | **28.35 ± 2.56** (+0.24 vs NAFNet) |
+| SSIM | **0.6832 ± 0.032** (+0.009 vs NAFNet) |
+| CNR | 1.168 ± 0.121 (SRAD 미달 지속) |
+
+실행:
+```bash
+uv run python scripts/09_augment/run_nafnet_aug.py --batch-size 48
+# 특정 fold만 재실행
+uv run python scripts/09_augment/run_nafnet_aug.py --start-fold 5 --end-fold 5
+```
+
+---
+
 ## 종합 결과 비교 (SBSDI D1, 18쌍 평균)
 
 | 방법 | 유형 | PSNR (dB) | SSIM | CNR | SRAD 대비 |
@@ -353,20 +446,39 @@ uv run python scripts/05_finetune/run_finetune.py --eval-only
 | **6-fold CV U-Net (batch=16)** | real clean GT | 27.21 ± 2.41 | 0.6822 ± 0.032 | 1.164 ± 0.113 | SSIM 초과 |
 | **6-fold CV U-Net (batch=64, ES)** | real clean GT | **28.19 ± 2.56** | **0.6814 ± 0.031** | 1.169 ± 0.121 | PSNR+SSIM 초과 |
 | 6-fold CV DnCNN (depth=20, ch=64) | real clean GT | 28.17 ± 2.47 | 0.6732 ± 0.032 | 1.167 ± 0.127 | U-Net과 동등 |
+| 6-fold CV NAFNet (width=32) | real clean GT | 28.11 ± 2.26 | 0.6743 ± 0.029 | **1.183 ± 0.120** | CNR 최고, 분산 최소 |
+| **NAFNet + Aug (K=4)** | real+aug clean GT | **28.35 ± 2.56** | **0.6832 ± 0.032** | 1.168 ± 0.121 | PSNR/SSIM 현재 최고 |
 | Real-ESRGAN x2 | SR(blind) | 27.30 ± 2.35 | 0.674 ± 0.034 | 1.121 ± 0.116 | SSIM만 초과 |
 | Real-ESRGAN x4 | SR(blind) | 27.57 ± 2.40 | 0.673 ± 0.034 | 1.166 ± 0.117 | PSNR+SSIM 초과 |
 
 > Real-ESRGAN 지표는 SR 출력을 원본 해상도(450×900)로 다운스케일 후 clean reference와 비교한 값.
 
 **핵심 발견**
-- PSNR 최고 (순수 디노이징): **6-fold CV U-Net (28.19 dB)** — AI 방법 최초로 SRAD(27.50) 초과 (+0.69 dB)
-- SSIM 최고 (순수 디노이징): 6-fold CV batch=16 (0.6822)
+- PSNR/SSIM 최고 (현재): **NAFNet+Aug — PSNR 28.35, SSIM 0.6832** — K=4 재실현 증강으로 소폭 향상
+- PSNR 최고 (증강 전): 6-fold CV U-Net (28.19 dB) — AI 방법 최초로 SRAD 초과
+- CNR 최고: **6-fold CV NAFNet (1.183)** — 증강 후에도 CNR은 소폭 하락(1.168)
 - CNR은 전통 방법 SRAD(1.220)를 어떤 AI 방법도 아직 초과하지 못함
-- Early stopping(patience=30) + batch=64 조합이 결정적: 과적합 방지 + 안정적 수렴
+- 667K(DnCNN) ≈ 1.95M(U-Net) ≈ 17M(NAFNet) ≈ NAFNet+Aug(K=4 증강) — 데이터 병목이 근본 원인
 
 **결론**
 
-real clean GT를 k-fold CV로 활용하고, batch=64 + early stopping(val PSNR+SSIM 기준)을 적용하면 SRAD를 유의미하게 초과 가능. DnCNN(667K, from scratch) ≈ U-Net(1.95M, pretrained) — 성능 병목은 모델 용량이 아닌 **데이터 크기(18쌍)**임이 확인됨. 다음 단계는 데이터 증강 또는 NAFNet 등 더 강력한 아키텍처 적용이다.
+real clean GT k-fold CV + early stopping으로 SRAD 초과 가능. 아키텍처 변경(DnCNN/U-Net/NAFNet)과 K=4 노이즈 재실현 증강 모두 PSNR 향상 효과는 각각 0.08 dB, 0.24 dB로 제한적. CNR 한계와 데이터 병목 해소를 위해서는 외부 real OCT 데이터 확보가 필요하다.
+
+---
+
+## 향후 작업 방향
+
+8단계까지의 실험으로 **데이터 크기(18쌍)가 유일한 병목**임이 확인됐다. 아키텍처를 바꿔도 PSNR 차이 0.08 dB 이내이므로, 이후 접근은 데이터 측면에 집중해야 한다.
+
+| 우선순위 | 방향 | 기대 효과 | 비고 |
+|---------|------|---------|------|
+| 1 | **데이터 증강 강화** (9단계 완료) | PSNR +0.24 dB 확인 — 추가 증강 가능 | elastic deformation, mixup, TTA |
+| 2 | **손실 함수 개선** | CNR 향상 (현재 SRAD 미달 유일 지표) | frequency loss, CNR-aware 항 추가 |
+| 3 | **외부 OCT 데이터 추가** | 데이터 병목 해소, 큰 성능 향상 기대 | clean GT 보유 데이터셋 필요 |
+| 4 | **치주 OCT 데이터 확보** | 실제 타겟 도메인 적용 | 교수님과 촬영 프로토콜 협의 |
+| 장기 | **Super-Resolution** | 해상도 향상 + 노이즈 제거 동시 | 스페클 제거 완성 후 적용 |
+
+> 상세 분석은 `results/result_description.md` 향후 작업 방향 섹션 참조.
 
 ---
 

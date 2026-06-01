@@ -15,6 +15,7 @@ NAS의 dataset/OCT 폴더 확인
 | MedSegBench / wbc | 현미경 | 400 | 세포 세그멘테이션 | 없음 |
 | MedSegBench / yeaz | 현미경 | 707 | 세포 세그멘테이션 | 없음 |
 | SBSDI (D1) | 망막 OCT | synthetic 18쌍 + real 39세트 | 디노이징 + SR | 있음 (synthetic) |
+| SBSDI augmented_noisy | 망막 OCT (합성) | 72개 (18세트 × K=4) | 증강 학습용 noisy | 있음 (clean은 D1 공유) |
 
 ---
 
@@ -304,6 +305,46 @@ For synthetic experiments/
 | 파일 | `HH1.tif`~`HH10.tif` (고품질) + `LL1.tif`~`LL10.tif` (저품질) |
 | 이미지 크기 | 900×450 px |
 | 용도 | SBSDI 딕셔너리 쌍 학습용. 자체 딕셔너리 재학습 시 사용 |
+
+#### 4-5. augmented_noisy (합성 노이즈 증강 — 생성 데이터)
+
+| 항목 | 내용 |
+|------|------|
+| 경로 | `augmented_noisy/set{01..18}/aug_{01..04}.tif` |
+| 생성 스크립트 | `scripts/09_augment/gen_noise_augment.py` |
+| 이미지 수 | 18세트 × 4개 = **72개** |
+| 이미지 크기 | 900×450 px (D1 원본과 동일) |
+| 포맷 | TIFF, uint8, 그레이스케일 |
+| 노이즈 모델 | Gamma 곱셈성 (L=5.266) + 가산 Gaussian (sigma_a=0.010) |
+| 파라미터 출처 | 2단계 SBSDI D1 18쌍 캘리브레이션 전체 평균값 |
+| 메타데이터 | `augmented_noisy/metadata.csv` (set_idx, aug_idx, clean_path, noisy_path, L, sigma_a, seed) |
+| 재현 시드 | `seed = 42 + (set_idx - 1)*4 + (aug_idx - 1)` |
+
+**용도**: 6-fold CV 학습 시 real noisy(1개/세트)와 합산해 학습 쌍 5배 증강.
+- 기존: 15쌍/fold → 4,125 패치/fold
+- 증강 후: 15세트 × 5쌍 = 75쌍/fold → 20,625 패치/fold
+
+**검증 지표** (생성 시 자동 측정):
+
+| 구분 | PSNR vs clean GT |
+|------|----------------|
+| real noisy (test.tif) | 17.74 ± 0.43 dB |
+| aug noisy (aug_*.tif) | 16.78 ± 0.74 dB |
+
+합성 노이즈가 실제 노이즈보다 약 1 dB 강함. 전체 평균 L 사용에 따른 허용 편차.
+
+```
+augmented_noisy/
+├── set01/
+│   ├── aug_01.tif   (seed=42)
+│   ├── aug_02.tif   (seed=43)
+│   ├── aug_03.tif   (seed=44)
+│   └── aug_04.tif   (seed=45)
+├── set02/ ... set18/
+└── metadata.csv
+```
+
+---
 
 ### MATLAB 코드 구성 (루트)
 

@@ -1,0 +1,25 @@
+# Windows 가상환경 - 리눅스와 호환 불가
+.venv/
+
+# 캐시 / 임시 파일
+__pycache__/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+*.log
+
+# Git 메타데이터
+.git/
+.gitignore
+
+# 로컬 편집기 설정
+.vscode/
+.idea/
+
+# 데이터 / 결과 / 가중치 - 볼륨으로 마운트
+data/
+results/
+weights/
+
+# 로컬 훈련 로그 (서버에서 새로 생성)
+C:/Temp/
