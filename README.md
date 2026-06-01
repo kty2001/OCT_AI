@@ -29,7 +29,7 @@ OCT(Optical Coherence Tomography)를 활용한 치주질환 탐지·예측 연�
 ```
 OCT_AI/
 ├── data/
-│   ├── Final_Publication_2013_SBSDI/   SBSDI D1 (noisy-clean 18쌍 + real 39세트)
+│   ├── Final_Publication_2013_SBSDI/   SBSDI D1(18쌍 noisy-clean) + D2(real 39세트) + D3(마우스)
 │   ├── AROI/                           망막 OCT 레이어 세그멘테이션 (1,136장 주석)
 │   ├── kaggle_RetinalOCTImages/        Kermany OCT2017 (84,484장)
 │   ├── MedSegBench/                    낭성액 세그멘테이션 등 (npz)
@@ -39,7 +39,12 @@ OCT_AI/
 │   ├── 02_synthetic_noise/             합성 스페클 노이즈 생성 파이프라인
 │   ├── 03_sub2full/                    자가지도 학습 (N2N 프레임쌍)
 │   ├── 03_supervised/                  지도학습 (합성 6,136쌍 → U-Net)
-│   ├── 04_sr_test/                     사전 학습 SR 모델 테스트
+│   ├── 04_sr_test/                     사전 학습 SR 모델 테스트 (Real-ESRGAN)
+│   ├── 05_finetune/                    합성 사전학습 → N2N fine-tuning
+│   ├── 06_kfold/                       6-fold CV 지도학습 (U-Net + real clean GT)
+│   ├── 07_dncnn/                       DnCNN 백본 6-fold CV
+│   ├── 08_nafnet/                      NAFNet 백본 6-fold CV
+│   ├── 09_augment/                     다중 노이즈 재실현 증강 + NAFNet
 │   └── make_ppt.py                     발표 자료 자동 생성
 ├── weights/
 │   ├── RealESRGAN_x2plus.pth           Real-ESRGAN x2 사전 학습 가중치 (64MB)
@@ -50,8 +55,14 @@ OCT_AI/
 │   ├── 03_sub2full/                    N2N 모델 체크포인트·지표·비교 이미지
 │   ├── 03_supervised/                  지도학습 체크포인트·지표·비교 이미지
 │   ├── 04_sr_test/                     SR 테스트 비교 이미지
+│   ├── 05_finetune/                    fine-tune 체크포인트·지표·비교 이미지
+│   ├── 06_kfold/                       6-fold CV 체크포인트·지표·비교 이미지
+│   ├── 07_dncnn/                       DnCNN 체크포인트·지표·비교 이미지
+│   ├── 08_nafnet/                      NAFNet 체크포인트·지표·비교 이미지
+│   ├── 09_nafnet_aug/                  NAFNet+Aug 체크포인트·지표
 │   ├── result_description.md          단계별 결과 정리
 │   └── presentation.pptx              발표 자료 (13슬라이드)
+├── Dockerfile                          서버 배포용 (ubuntu:22.04 + Python 3.12 + uv)
 └── pyproject.toml                      uv 의존성 관리
 ```
 
@@ -156,7 +167,7 @@ clean Ground Truth 없이 OCT 이미지만으로 학습하는 자가지도 방�
 
 ### 방법: N2N 프레임쌍 (Noise2Noise)
 
-각 세트의 1~4.tif는 동일 위치를 반복 스캔한 프레임이다. 같은 세트의 두 프레임은 조직 구조는 동일하고 스페클 패턴은 독립적이므로 Noise2Noise 조건을 자연스럽게 만족한다.
+각 세트의 1~4.tif는 test.tif의 **인접 공간 슬라이스**(3D 볼륨 내 이웃 B-scan)다. 완전한 동일 위치 반복 스캔은 아니지만, 인접 슬라이스는 조직 구조가 매우 유사하고 스페클 패턴은 독립적이므로 근사 Noise2Noise 조건으로 사용한다. (동일 위치 반복 촬영 평균이 GT로 사용되는 D1과 구별됨 — D2 인접 슬라이스 diff/frame std 비율 1.07 vs D1 동일 위치 0.77)
 
 - 학습 쌍: 39세트 × 12 순서쌍(i≠j) = **468쌍**
 - 아키텍처: 경량 U-Net (~1.95M params, 인코더 3단계 + 보틀넥 + 디코더 3단계)
@@ -475,7 +486,7 @@ real clean GT k-fold CV + early stopping으로 SRAD 초과 가능. 아키텍처 
 | 1 | **데이터 증강 강화** (9단계 완료) | PSNR +0.24 dB 확인 — 추가 증강 가능 | elastic deformation, mixup, TTA |
 | 2 | **손실 함수 개선** | CNR 향상 (현재 SRAD 미달 유일 지표) | frequency loss, CNR-aware 항 추가 |
 | 3 | **외부 OCT 데이터 추가** | 데이터 병목 해소, 큰 성능 향상 기대 | clean GT 보유 데이터셋 필요 |
-| 4 | **치주 OCT 데이터 확보** | 실제 타겟 도메인 적용 | 교수님과 촬영 프로토콜 협의 |
+| 4 | **치주 OCT 데이터 확보** | 실제 타겟 도메인 적용 | 동일 위치 ~40회 반복 촬영 → 픽셀 평균으로 clean GT 생성 (SBSDI D1 방식). 교수님과 촬영 프로토콜 협의 필요 |
 | 장기 | **Super-Resolution** | 해상도 향상 + 노이즈 제거 동시 | 스페클 제거 완성 후 적용 |
 
 > 상세 분석은 `results/result_description.md` 향후 작업 방향 섹션 참조.
@@ -547,13 +558,24 @@ from torchvision.transforms.functional import rgb_to_grayscale
 | Kermany OCT2017 | 84,484 | 분류 (CNV/DME/DRUSEN/NORMAL) | 없음 |
 | AROI | 3,072 (주석 1,136) | 레이어 세그멘테이션 | 없음 |
 | MedSegBench / cystoidfluid | 1,006 | 낭성액 세그멘테이션 | 없음 |
-| SBSDI D1 | synthetic 18쌍 + real 39세트 | 디노이징 + SR | 있음 (synthetic) |
+| SBSDI (Fang TMI 2013) | D1 synthetic 18쌍 / D2 real 39세트 / D3 마우스 | 디노이징 + SR | D1만 있음 (average.tif) |
 
-외부 공개 데이터셋 접근 시도 (실패):
-- PKU37 (37쌍 noisy-clean) → 알리바바 클라우드 계정 요구
-- Sub2Full vis-OCT → 데이터 비공개
-- RETOUCH (112 볼륨) → Grand Challenge 계정 요구
-- ODTiD (242장) → OPENICPSR 계정 요구
+SBSDI 패키지는 D1~D3를 모두 포함하나, clean GT(다중 프레임 평균)는 D1(18쌍)에만 존재한다. D2는 인간 망막 실제 노이즈 39세트, D3는 마우스 망막 실제 노이즈로 GT 없음.
+
+**average.tif 생성 방법**: 동일 위치를 N≈40회 반복 스캔 → 픽셀별 평균. `test.tif`는 그 중 단일 프레임, `1~4.tif`는 인접 공간 슬라이스(다른 위치). 프레임 수는 Dictionary 학습용 HH/LL 쌍 10개의 배경 노이즈 std 비율(≈6.3)의 제곱으로 추정.
+
+**보유 데이터 clean GT 추가 생성 가능 여부**: 불가. AROI·Kermany·MedSegBench·SBSDI D2/D3 모두 동일 위치 반복 스캔이 아닌 순차 슬라이스 또는 단일 이미지로, 평균을 통한 GT 생성 요건을 충족하지 않는다 (인접 프레임 간 diff std / frame std 비율: 0.86~1.31, 기준값인 SBSDI D1 동일 위치 반복 0.77 미달).
+
+외부 공개 데이터셋 탐색 결과:
+
+| 데이터셋 | 규모 | clean GT | 상태 |
+|---------|------|---------|------|
+| PKU37 | 37쌍 | 있음 | 알리바바 클라우드 계정 요구 — 접근 실패 |
+| Sub2Full vis-OCT | 미공개 | 있음 | 데이터 비공개 |
+| RETOUCH | 112 볼륨 | 없음 | Grand Challenge 계정 요구 — 접근 실패 |
+| ODTiD | 242장 | 없음 | OPENICPSR 계정 요구 — 접근 실패 |
+| Duke AMD SD-OCT (RPEDC 2013) | 384명, 38,400 B-scans | 없음 | 직접 다운로드 가능 — 합성 노이즈 추가 활용만 가능 |
+| Duke Srinivasan BOE 2014 | 45명 | 없음 | 직접 다운로드 가능 — 소규모, 분류용 |
 
 ---
 

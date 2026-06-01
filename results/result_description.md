@@ -814,6 +814,80 @@ clean GT 보유 OCT 데이터셋:
 
 계정 발급 재시도 또는 저자 직접 컨택이 현실적인 방법.
 
+**Duke University Sina Farsiu 연구실 (people.duke.edu/~sf59) 탐색 결과 (2026-06-01)**
+
+| 데이터셋 | 규모 | clean GT | 접근 | 비고 |
+|---------|------|---------|------|------|
+| SBSDI (Fang TMI 2013) | D1 18쌍 + D2 39세트 + D3 마우스 1세트 | D1만 있음 | 이미 보유 | D3는 마우스 망막, GT 없음 — 별도 배포 없음 |
+| AMD SD-OCT (RPEDC 2013) | 384명, 38,400 B-scans | 없음 | 직접 다운로드 가능 | AMD vs 정상 분류용. 합성 노이즈 추가 후 자기지도학습 데이터로만 활용 가능 |
+| Srinivasan BOE 2014 | 45명 (정상/AMD/DME 각 15명) | 없음 | 직접 다운로드 가능 | 소규모, 분류용 |
+| Chiu DME (BOE 2014) | 다수 | 없음 | 직접 다운로드 가능 | 낭종 세그멘테이션용 |
+
+결론: Duke 페이지에서 clean GT 보유 데이터는 SBSDI D1뿐이며 이미 보유 중. 나머지 Duke 데이터셋은 합성 노이즈를 씌워 자기지도학습 데이터를 늘리는 용도로만 활용 가능.
+
+**SBSDI 패키지 내부 구조 확인 결과**
+
+보유 중인 패키지(`data/Final_Publication_2013_SBSDI/`)는 논문 D1~D3를 모두 포함한다:
+
+| 서브디렉토리 | SBSDI 논문 명칭 | 폴더 수 | 파일 구성 | clean GT |
+|------------|--------------|--------|---------|---------|
+| `For synthetic experiments/` | D1 | 18 | test.tif, average.tif, 1~4.tif | **있음** (average.tif) |
+| `For real experiments on Humans/` | D2 | 39 | test.tif, 1~4.tif | 없음 |
+| `For real experiments on Mouse/` | D3 | 3 (One/Two/Four time) | test.tif, 1~4.tif, 알고리즘 결과물 | 없음 |
+
+추가로 확보 가능한 새로운 clean GT 쌍은 이 패키지에 존재하지 않는다.
+
+**average.tif 생성 방법 분석 결과**
+
+SBSDI MATLAB 코드(`Demo_SBSDI.m`)에서 average.tif를 "High-SNR-High-Resolution averaged image"로 명시한다. 실제 생성 방법:
+
+```
+동일 위치 N회 반복 스캔: frame_1, frame_2, ..., frame_N
+    ↓ 픽셀별 평균
+  average.tif   ← clean GT
+  (frame_k 1장)
+  test.tif      ← noisy 입력
+  1~4.tif       ← 인접 공간 슬라이스 (다른 위치, 보조 채널 용도)
+```
+
+Dictionary 학습용 HH/LL 이미지 쌍 10개의 배경 영역 노이즈 비교로 N 추정:
+
+| 기준 데이터 | HH(avg) 배경 std | LL(single) 배경 std | 추정 N |
+|------------|----------------|-------------------|--------|
+| HH2/LL2 | 4.35 | 27.26 | 39.2 |
+| HH3/LL3 | 4.36 | 27.17 | 38.8 |
+| HH6/LL6 | 4.29 | 26.91 | 39.3 |
+| HH9/LL9 | 4.51 | 26.47 | 34.5 |
+| HH10/LL10 | 4.24 | 26.29 | 38.4 |
+
+배경 영역이 확실한 5개 쌍 기준 **N ≈ 35~40**으로 일관됨. 단일 프레임 대비 노이즈 표준편차는 1/√N ≈ 1/6.3배로 감소.
+
+**보유 데이터셋 clean GT 생성 가능 여부 분석**
+
+GT 생성 요건: 동일 위치를 N회 반복 촬영한 프레임이 필요. 인접 슬라이스(다른 공간 위치)로는 불가.
+판별 기준: diff(frameA - frameB) std / frameA std — 같은 위치이면 구조 성분이 상쇄되어 0.77 수준, 다른 위치이면 1.0 전후.
+
+| 데이터셋 | diff/frame std 비율 | 판단 | GT 생성 가능 |
+|---------|-------------------|------|------------|
+| SBSDI D1 (test vs average) | 0.771 | 동일 위치 반복 스캔 | 이미 GT 존재 |
+| SBSDI D2 (test vs 1~4.tif) | 1.07 | 인접 슬라이스 | 불가 |
+| SBSDI D3 (Mouse) | — | One/Two/Four time = 동일 데이터 다른 해상도 | 불가 |
+| AROI (24 patient, 128 B-scans/patient) | 0.86~1.31 | 3D 볼륨 순차 슬라이스 | 불가 |
+| Kermany OCT2017 | — | 환자별 다중 스캔이지만 해상도 혼재·세션 불일치 | 불가 |
+| MedSegBench | — | 세그멘테이션 전용, 단일 이미지 | 불가 |
+
+결론: 현재 보유 데이터 중 clean GT를 추가 생성할 수 있는 데이터셋은 없다.
+
+#### 방향 4 — 치주 OCT 데이터 확보 시 clean GT 생성 프로토콜
+
+치주 OCT 데이터를 직접 수집하는 경우, 아래 프로토콜로 SBSDI D1과 동일한 방식의 noisy-clean 쌍을 생성할 수 있다:
+
+1. **동일 위치 ~40회 반복 촬영** → 픽셀별 평균 → clean GT
+2. **단일 프레임 1장 저장** → noisy 입력
+3. **인접 슬라이스 4장** → 보조 채널 (선택)
+
+N≈40의 근거: SBSDI D1 분석에서 배경 영역 노이즈 std 비율(HH/LL ≈ 1/6.3 → N ≈ 40). N회 평균 시 노이즈 표준편차 1/√N배 감소. N=40이면 단일 프레임 대비 노이즈 약 84% 제거.
+
 #### 방향 4 — 치주 OCT 데이터 확보 (우선순위: 높음, 비용: 매우 높음)
 
 최종 목표 도메인. 현재 모든 학습은 망막 OCT 기반으로, 치주 도메인 전이 성능은 미검증.
