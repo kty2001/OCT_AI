@@ -21,6 +21,7 @@ OCT(Optical Coherence Tomography)를 활용한 치주질환 탐지·예측 연�
 | 7단계 | DnCNN 백본 6-fold CV (depth=20, from scratch) | 완료 — U-Net과 동등, 데이터 병목 확인 |
 | 8단계 | NAFNet 백본 6-fold CV (width=32, from scratch) | 완료 — DnCNN/U-Net과 동등, 데이터 병목 재확인 |
 | 9단계 | 다중 노이즈 재실현 증강 (K=4) + NAFNet 6-fold CV | 완료 — PSNR/SSIM 소폭 향상 (+0.24 dB) |
+| 10단계 | NAFNet lr=1e-4 재실험 (lr 영향 검증) | 완료 — lr=1e-3 대비 오히려 성능 하락, 데이터 병목 재확인 |
 
 ---
 
@@ -446,6 +447,30 @@ uv run python scripts/09_augment/run_nafnet_aug.py --start-fold 5 --end-fold 5
 
 ---
 
+## 10단계: NAFNet lr=1e-4 재실험 — lr 영향 검증 (완료)
+
+8단계(lr=1e-3)에서 loss 감소에도 val_psnr이 초반에 정점 후 정체·하락하는 현상이 확인됐다. lr을 1e-4로 낮춰 학습이 안정화되는지 검증.
+
+- **스크립트**: `scripts/08_nafnet/run_nafnet.py`
+- **결과**: `results/10_nafnet_lr1e4/`
+
+| 항목 | 8단계 (lr=1e-3) | 10단계 (lr=1e-4) |
+|------|---------------|----------------|
+| PSNR | **28.11 ± 2.26** | 27.95 ± 2.11 |
+| SSIM | **0.6743 ± 0.029** | 0.6666 ± 0.026 |
+| CNR | 1.183 ± 0.120 | **1.191 ± 0.116** |
+| Early stop epoch | 32~46 | 40~61 |
+| Epoch 1 val PSNR | ~28.27 (이미 높음) | ~21~25 (낮음) |
+
+**결과**: lr=1e-4가 오히려 성능 하락 (PSNR -0.16 dB). lr=1e-3은 초반 몇 에포크에서 빠르게 좋은 수렴점을 찾고 early stopping이 그 시점을 포착한다. lr=1e-4는 patience=30 내에 그 수렴점까지 도달하지 못해 최종 성능이 낮다. 하이퍼파라미터 조정으로는 데이터 병목을 해소할 수 없음을 재확인.
+
+실행:
+```bash
+uv run python scripts/08_nafnet/run_nafnet.py --lr 1e-4 --batch-size 48 --results-dir results/10_nafnet_lr1e4
+```
+
+---
+
 ## 종합 결과 비교 (SBSDI D1, 18쌍 평균)
 
 | 방법 | 유형 | PSNR (dB) | SSIM | CNR | SRAD 대비 |
@@ -461,6 +486,7 @@ uv run python scripts/09_augment/run_nafnet_aug.py --start-fold 5 --end-fold 5
 | 6-fold CV DnCNN (depth=20, ch=64) | real clean GT | 28.17 ± 2.47 | 0.6732 ± 0.032 | 1.167 ± 0.127 | U-Net과 동등 |
 | 6-fold CV NAFNet (width=32) | real clean GT | 28.11 ± 2.26 | 0.6743 ± 0.029 | **1.183 ± 0.120** | CNR 최고, 분산 최소 |
 | **NAFNet + Aug (K=4)** | real+aug clean GT | **28.35 ± 2.56** | **0.6832 ± 0.032** | 1.168 ± 0.121 | PSNR/SSIM 현재 최고 |
+| NAFNet lr=1e-4 (10단계) | real clean GT | 27.95 ± 2.11 | 0.6666 ± 0.026 | 1.191 ± 0.116 | lr 인하로 오히려 하락 |
 | Real-ESRGAN x2 | SR(blind) | 27.30 ± 2.35 | 0.674 ± 0.034 | 1.121 ± 0.116 | SSIM만 초과 |
 | Real-ESRGAN x4 | SR(blind) | 27.57 ± 2.40 | 0.673 ± 0.034 | 1.166 ± 0.117 | PSNR+SSIM 초과 |
 
@@ -472,10 +498,11 @@ uv run python scripts/09_augment/run_nafnet_aug.py --start-fold 5 --end-fold 5
 - CNR 최고: **6-fold CV NAFNet (1.183)** — 증강 후에도 CNR은 소폭 하락(1.168)
 - CNR은 전통 방법 SRAD(1.220)를 어떤 AI 방법도 아직 초과하지 못함
 - 667K(DnCNN) ≈ 1.95M(U-Net) ≈ 17M(NAFNet) ≈ NAFNet+Aug(K=4 증강) — 데이터 병목이 근본 원인
+- **lr 조정 무효 (10단계)**: NAFNet lr=1e-4는 lr=1e-3 대비 PSNR -0.16 dB. lr=1e-3의 빠른 초기 수렴이 데이터 부족 환경에서 오히려 유리하게 작용. 하이퍼파라미터 튜닝의 한계 재확인
 
 **결론**
 
-real clean GT k-fold CV + early stopping으로 SRAD 초과 가능. 아키텍처 변경(DnCNN/U-Net/NAFNet)과 K=4 노이즈 재실현 증강 모두 PSNR 향상 효과는 각각 0.08 dB, 0.24 dB로 제한적. CNR 한계와 데이터 병목 해소를 위해서는 외부 real OCT 데이터 확보가 필요하다.
+real clean GT k-fold CV + early stopping으로 SRAD 초과 가능. 아키텍처 변경(DnCNN/U-Net/NAFNet), K=4 노이즈 재실현 증강, lr 조정 모두 근본 한계를 해소하지 못함. CNR 한계와 데이터 병목 해소를 위해서는 외부 real OCT 데이터 확보가 필요하다.
 
 ---
 

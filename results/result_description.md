@@ -741,6 +741,62 @@ uv run python scripts/09_augment/run_nafnet_aug.py --start-fold 5 --end-fold 5
 
 ---
 
+## 10단계: NAFNet lr=1e-4 재실험 — lr 영향 검증
+
+### 개요
+
+8단계에서 확인된 loss-PSNR 분리 현상(lr=1e-3이 너무 높아 초반 과적합)을 해소하기 위해 lr을 1e-4로 낮춰 재실험.
+
+- **스크립트**: `scripts/08_nafnet/run_nafnet.py`
+- **결과 파일**:
+  - `results/10_nafnet_lr1e4/checkpoints/fold_{k}/best.pth`
+  - `results/10_nafnet_lr1e4/metrics/fold_{k}/training_log.csv`
+  - `results/10_nafnet_lr1e4/metrics/summary.csv`
+
+### 학습 설정
+
+| 항목 | 8단계 | 10단계 |
+|------|-------|-------|
+| lr | 1e-3 | **1e-4** |
+| batch | 32 | **48** |
+| 나머지 | 동일 | 동일 |
+
+### 폴드별 결과
+
+| Fold | 평가 쌍 | best val PSNR | best val SSIM | stopped epoch | Epoch 1 val PSNR |
+|------|---------|--------------|--------------|--------------|-----------------|
+| 1 | 1, 7, 13 | 28.3105 | 0.6742 | 49 | 21.441 |
+| 2 | 2, 8, 14 | 29.6645 | 0.6922 | 43 | 24.622 |
+| 3 | 3, 9, 15 | 26.6148 | 0.6576 | 48 | 22.277 |
+| 4 | 4, 10, 16 | 28.7183 | 0.6721 | 40 | 23.601 |
+| 5 | 5, 11, 17 | 26.3658 | 0.6558 | 56 | 22.088 |
+| 6 | 6, 12, 18 | 28.0701 | 0.6813 | 61 | 23.968 |
+
+### 성능 결과 (SBSDI D1, 18쌍 6-fold 평균)
+
+| 방법 | PSNR (dB) | SSIM | CNR |
+|------|-----------|------|-----|
+| SRAD (베이스라인) | 27.50 +- 1.98 | 0.652 +- 0.023 | **1.220 +- 0.121** |
+| **8단계 NAFNet (lr=1e-3)** | **28.11 +- 2.26** | **0.6743 +- 0.029** | 1.183 +- 0.120 |
+| 10단계 NAFNet (lr=1e-4) | 27.95 +- 2.11 | 0.6666 +- 0.026 | **1.191 +- 0.116** |
+
+### 분석
+
+- **lr=1e-4가 오히려 성능 하락** (PSNR -0.16 dB, SSIM -0.008): 예상과 반대되는 결과.
+- **원인 — Epoch 1 val_psnr 차이**:
+  - lr=1e-3: epoch 1에서 val_psnr ~28.27로 이미 높음. 초반 몇 스텝에서 빠르게 좋은 수렴점 도달 후 early stopping이 포착.
+  - lr=1e-4: epoch 1에서 val_psnr ~21~25로 낮음. 점진적으로 학습하지만 patience=30 내에 lr=1e-3의 초반 수렴점 수준까지 도달하지 못함.
+- **CNR은 소폭 향상** (1.183 → 1.191): 안정적 학습이 경계 대비 보존에 미세하게 유리.
+- **결론**: 데이터 15쌍/fold 환경에서 lr 조정은 근본 해결책이 아님. 데이터 확보 없이는 하이퍼파라미터 튜닝의 효과가 극히 제한적.
+
+### 재실행 명령
+
+```bash
+uv run python scripts/08_nafnet/run_nafnet.py --lr 1e-4 --batch-size 48 --results-dir results/10_nafnet_lr1e4
+```
+
+---
+
 ## 전체 방법 비교 (SBSDI D1, 18쌍 평균)
 
 | 방법 | PSNR (dB) | SSIM | CNR | 비고 |
@@ -758,6 +814,7 @@ uv run python scripts/09_augment/run_nafnet_aug.py --start-fold 5 --end-fold 5
 | 7단계 (DnCNN, ES) | 28.17 +- 2.47 | 0.6732 +- 0.032 | 1.167 +- 0.127 | from scratch, U-Net과 동등 |
 | 8단계 (NAFNet-32, ES) | 28.11 +- 2.26 | 0.6743 +- 0.029 | **1.183 +- 0.120** | from scratch, CNR 최고 |
 | **9단계 (NAFNet+Aug, K=4)** | **28.35 +- 2.56** | **0.6832 +- 0.032** | 1.168 +- 0.121 | 증강 5배, PSNR/SSIM 최고 |
+| 10단계 (NAFNet lr=1e-4) | 27.95 +- 2.11 | 0.6666 +- 0.026 | 1.191 +- 0.116 | lr 인하로 오히려 하락, 데이터 병목 재확인 |
 
 ---
 
@@ -776,6 +833,7 @@ uv run python scripts/09_augment/run_nafnet_aug.py --start-fold 5 --end-fold 5
 | 7단계 | DnCNN 백본 6-fold CV (from scratch) | 완료 — U-Net과 동등, 데이터 병목 확인 |
 | 8단계 | NAFNet 백본 6-fold CV (width=32, from scratch) | 완료 — CNR 최고, 데이터 병목 재확인 |
 | 9단계 | 다중 노이즈 재실현 증강 (K=4) + NAFNet 6-fold CV | 완료 — PSNR/SSIM 소폭 향상, CNR 한계 미해소 |
+| 10단계 | NAFNet lr=1e-4 재실험 (lr 영향 검증) | 완료 — lr=1e-3 대비 오히려 성능 하락, 데이터 병목 재확인 |
 
 ---
 

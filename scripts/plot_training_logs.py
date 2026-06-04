@@ -158,6 +158,14 @@ def main() -> None:
         "Step 9: NAFNet+Aug 6-fold CV",
     )
 
+    # Step 10: NAFNet lr=1e-4
+    print("\n[Step 10] NAFNet lr=1e-4 6-fold CV")
+    plot_kfold(
+        RESULTS / "10_nafnet_lr1e4" / "metrics",
+        RESULTS / "10_nafnet_lr1e4" / "metrics",
+        "Step 10: NAFNet lr=1e-4 6-fold CV",
+    )
+
     print("\nDone.")
 
 
