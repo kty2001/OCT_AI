@@ -3,9 +3,9 @@
 CLAUDE.md
 
 # Ignore files
-.pt
-.pth
-.ckpt
+*.pt
+*.pth
+*.ckpt
 .python-version
 
 # Ignore directories

@@ -316,7 +316,15 @@ def _print_vram(device: torch.device):
 # ---------------------------------------------------------------------------
 
 def main():
+    global RESULTS_DIR, CKPT_DIR, METRICS_DIR, IMAGES_DIR
     args = parse_args()
+
+    if args.results_dir:
+        RESULTS_DIR = ROOT / args.results_dir
+        CKPT_DIR    = RESULTS_DIR / "checkpoints"
+        METRICS_DIR = RESULTS_DIR / "metrics"
+        IMAGES_DIR  = RESULTS_DIR / "images"
+
     torch.set_num_threads(args.cpu_threads)
 
     device = torch.device(
@@ -414,6 +422,8 @@ def parse_args():
     p.add_argument("--device",     type=str,   default="auto")
     p.add_argument("--start-fold", type=int,   default=1,
                    help="이 fold부터 학습 시작 (이전 fold는 기존 결과 재사용)")
+    p.add_argument("--results-dir", type=str, default=None,
+                   help="결과 저장 디렉토리 (ROOT 기준 상대 경로, 기본: results/08_nafnet)")
     return p.parse_args()
 
 

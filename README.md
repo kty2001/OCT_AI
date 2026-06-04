@@ -33,7 +33,7 @@ OCT_AI/
 │   ├── AROI/                           망막 OCT 레이어 세그멘테이션 (1,136장 주석)
 │   ├── kaggle_RetinalOCTImages/        Kermany OCT2017 (84,484장)
 │   ├── MedSegBench/                    낭성액 세그멘테이션 등 (npz)
-│   └── data_description.md            데이터셋 상세 설명
+│   └── data_description.md             데이터셋 상세 설명
 ├── scripts/
 │   ├── 01_baseline/                    전통적 방법 베이스라인 (NLM, BM3D, SRAD)
 │   ├── 02_synthetic_noise/             합성 스페클 노이즈 생성 파이프라인
@@ -116,7 +116,7 @@ uv run python scripts/01_baseline/run_baseline.py
 
 ## 2단계: 합성 스페클 노이즈 생성 파이프라인 (완료)
 
-clean 이미지만 보유한 대규모 데이터셋(AROI, Kermany)에 물리 기반 스페클 노이즈를 합성하여 지도학습용 noisy-clean 쌍을 생성한다.
+pixel-aligned noisy-clean 쌍이 없는 대규모 망막 OCT 데이터셋(AROI, Kermany)을 활용한다. 이 데이터셋의 이미지는 real OCT 촬영본으로 고유한 스페클 노이즈를 포함하고 있으나, pixel-aligned clean 기준이 존재하지 않으므로 원본 이미지를 의사(pseudo) clean 기준으로 삼아 물리 기반 합성 스페클을 추가함으로써 지도학습용 noisy-clean 쌍을 생성한다. 이 방식으로 학습된 모델은 추가된 합성 스페클만을 제거 대상으로 학습하게 되어, 실제 OCT 스페클에 대한 일반화가 제한된다(3단계-B 도메인 갭 확인).
 
 - **스크립트**: `scripts/02_synthetic_noise/`
 - **결과**: `results/02_synthetic_noise/`
@@ -139,11 +139,11 @@ $N_s$는 곱셈성 스페클 노이즈 (mean=1, var=1/L), $N_a$는 가산성 가
 
 ### 생성된 학습 데이터
 
-| 데이터셋 | 쌍 수 | 해상도 (H×W) | 비고 |
-|---------|------|------------|------|
-| AROI | 1,136 | 512×1024 | 주석 완료 B-scan, 90도 회전 보정 |
-| Kermany OCT2017 | 5,000 | 496×512 | train 서브셋 (랜덤 샘플링, seed=42) |
-| **합계** | **6,136** | — | `results/02_synthetic_noise/metadata.csv` |
+| 데이터셋 | 쌍 수 | 해상도 (H×W) | 저장 경로 | 비고 |
+|---------|------|------------|---------|------|
+| AROI | 1,136 | 512×1024 | `results/02_synthetic_noise/AROI/clean/`, `…/noisy/` | 주석 완료 B-scan, 90도 회전 보정 |
+| Kermany OCT2017 | 5,000 | 496×512 | `results/02_synthetic_noise/Kermany/clean/`, `…/noisy/` | train 서브셋 (랜덤 샘플링, seed=42) |
+| **합계** | **6,136** | — | `results/02_synthetic_noise/metadata.csv` | clean/noisy 경로 및 이미지 크기 기록 |
 
 실행:
 ```bash
@@ -352,6 +352,7 @@ SBSDI D1 18쌍을 k=6 fold로 나눠 real clean GT로 지도학습. 방향 A(cle
 
 | 설정 | 6단계-A | 6단계-B |
 |------|---------|---------|
+| 초기 가중치 | from_scratch | from_scratch |
 | 배치 / 에포크 | 16 / 150 | **64 / 500** |
 | Early stopping | 없음 | **patience=30** |
 | 학습 시간 | 175분 | **47분** |
@@ -409,6 +410,7 @@ uv run python scripts/07_dncnn/run_dncnn.py
 | CNR | **1.183** (3개 아키텍처 중 최고) |
 
 - **핵심 발견**: 17M NAFNet ≈ 1.95M U-Net ≈ 667K DnCNN — 데이터 병목 3번 연속 확인
+- **NAFNet 특이 현상 (loss-PSNR 분리)**: lr=1e-3(U-Net 5e-5 대비 20배)으로 인해 val_psnr이 epoch 1~9에서 최고점 도달 후 정체·하락. train_loss는 계속 감소하나 일반화 성능은 개선되지 않는 과적합 패턴 발생. 17M 파라미터가 fold당 15쌍을 조기 암기하는 것이 원인. best.pth는 초반 epoch 가중치로 저장됨. lr 인하 또는 데이터 확보로 해소 가능
 
 실행:
 ```bash
@@ -421,7 +423,7 @@ uv run python scripts/08_nafnet/run_nafnet.py --start-fold 2
 
 ## 9단계: 다중 노이즈 재실현 증강 + NAFNet (완료)
 
-18개 clean GT에 노이즈 모델(L=5.266)로 K=4개 합성 noisy를 추가 생성. 학습 데이터 5배 증가(15쌍 → 75쌍/fold). 평가는 real noisy로만 수행.
+18개 clean GT에 노이즈 모델(2단계 방식, L=5.266)로 K=4개 합성 noisy를 추가 생성. 학습 데이터 5배 증가(15쌍 → 75쌍/fold). 평가는 real noisy로만 수행.
 
 - **스크립트**: `scripts/09_augment/run_nafnet_aug.py`
 - **증강 데이터**: `data/Final_Publication_2013_SBSDI/augmented_noisy/`
@@ -530,6 +532,8 @@ from torchvision.transforms.functional import rgb_to_grayscale
 
 - **A-scan**: 깊이 방향 단일 데이터(1차원)
 - **B-scan**: 연속된 A-scan으로 구성된 단면 영상(2차원)
+- **C-scan**: 3D 볼륨을 일정 깊이로 절단한 수평면 영상(2차원)
+- **3D OCT volume**: 연속된 B-scan을 쌓아 구성한 공간 데이터(3차원)
 - **축 방향 해상도**: 광원 대역폭에 의해 결정 ($\Delta z \propto \lambda_0^2 / \Delta\lambda$), 임상 기준 5~10 µm
 - **측 방향 해상도**: 대물렌즈 개구수(NA)에 의해 결정
 

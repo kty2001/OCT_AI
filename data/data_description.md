@@ -9,8 +9,8 @@ NAS의 dataset/OCT 폴더 확인
 
 | 데이터셋 | 모달리티 | 이미지 수 | 태스크 | noisy-clean 쌍 |
 |---------|---------|---------|--------|---------------|
-| Kermany OCT2017 | 망막 OCT | 84,484 | 분류 | 없음 |
-| AROI | 망막 OCT | 3,072 (주석 1,136) | 레이어 세그멘테이션 | 없음 |
+| Kermany OCT2017 | 망막 OCT | 84,484 | 분류 | 없음 (real OCT, 스페클 내재. 의사 clean 기준으로 활용 가능) |
+| AROI | 망막 OCT | 3,072 (주석 1,136) | 레이어 세그멘테이션 | 없음 (real OCT, 스페클 내재. 의사 clean 기준으로 활용 가능) |
 | MedSegBench / cystoidfluid | 망막 OCT | 1,006 | 유체 세그멘테이션 | 없음 |
 | MedSegBench / wbc | 현미경 | 400 | 세포 세그멘테이션 | 없음 |
 | MedSegBench / yeaz | 현미경 | 707 | 세포 세그멘테이션 | 없음 |
@@ -64,10 +64,10 @@ OCT2017_/
 
 ### 특이사항
 
-- 분류(Classification) 태스크 전용 데이터. noisy-clean 쌍 없음
+- 분류(Classification) 태스크 전용 데이터. pixel-aligned noisy-clean 쌍 없음
 - 이미지마다 해상도가 일정하지 않으며 망막의 위치·기울기가 제각각
 - train 클래스 불균형 심함 (CNV 37k vs DRUSEN 8.6k)
-- Diffusion 모델 사전학습, 자기지도 디노이징(Noise2Void 등) 백본 사전학습에 활용 가능
+- real OCT 이미지이므로 고유한 스페클 노이즈를 포함함. 2단계 합성 파이프라인에서는 pixel-aligned clean 기준이 없으므로 원본 이미지를 의사(pseudo) clean 기준으로 삼아 합성 스페클을 추가하는 방식으로 활용
 
 ---
 
@@ -142,6 +142,7 @@ AROI/
 - 이미지가 세로로 긴 형태(512×1024)로 저장 — 일반적인 OCT B-scan(가로 긴 형태)과 **90도 회전**된 상태
 - `number/` 마스크 값이 0~5로 매우 작아 이미지 뷰어로 보면 전부 검게 보임
 - `inter_intra/`는 동일 B-scan에 대해 복수의 전문의가 주석한 데이터로 알고리즘 재현성 평가용
+- real OCT 이미지이므로 고유한 스페클 노이즈를 포함함. 2단계 합성 파이프라인에서는 pixel-aligned clean 기준이 없으므로 원본 이미지를 의사(pseudo) clean 기준으로 삼아 합성 스페클을 추가하는 방식으로 활용
 
 ---
 
@@ -249,6 +250,28 @@ labels = data["train_label"]    # shape: (N, H, W)
 | 문의 | fangleyuan@gmail.com |
 
 OCT 디노이징 논문에서 **D1** 이라는 이름으로 자주 인용되는 noisy-clean 쌍 데이터셋입니다. SBSDI(Sparsity Based Simultaneous Denoising and Interpolation) 알고리즘 검증용으로 공개되었으며, MATLAB 코드와 사전학습 딕셔너리를 함께 포함합니다.
+
+### D1 · D2 · D3 구분
+
+SBSDI 패키지는 세 가지 하위 데이터셋(D1~D3)으로 구성된다. 폴더명이 D1/D2/D3로 명시되어 있지 않으므로 아래 매핑을 기준으로 사용한다.
+
+| 구분 | 폴더명 | 대상 | 세트 수 | 이미지 크기 | clean GT | 용도 |
+|------|--------|------|--------|-----------|----------|------|
+| **D1** | `For synthetic experiments` | 인간 망막 (Normal + AMD) | 18쌍 | 900×450 | **있음** (`average.tif`, 다중 프레임 평균) | 디노이징 + SR 정량 평가, 지도학습 |
+| **D2** | `For real experiments on Humans` | 인간 망막 (13명 × 3위치) | 39세트 | 450×450 | **없음** | 자가지도(N2N) 학습 |
+| **D3** | `For real experiments on Mouse` | 마우스 망막 | 1마우스 × 3조건 | 1000/500/250×450 | **없음** | SR 배율별 성능 비교 |
+
+**D1 — clean GT가 있는 유일한 하위셋**
+
+동일 위치를 N≈40회 반복 스캔한 뒤 픽셀별 평균을 낸 `average.tif`가 clean 기준(GT)으로 사용된다. `test.tif`는 그 중 단일 프레임으로 noisy 입력에 해당한다. `1~4.tif`는 인접 공간 슬라이스(다른 깊이 위치)로 N2N 학습용 보조 쌍으로 활용 가능하다.
+
+**D2 — clean GT 없는 실제 인간 망막 데이터**
+
+13명 피험자 × 중심와·상부·하부 3위치 = 39세트. 각 세트는 `test.tif`(noisy 입력) + `1~4.tif`(인접 슬라이스)로만 구성되며 `average.tif`가 없다. 자가지도 학습(Noise2Noise)에 적합하며, 정량 평가에는 사용할 수 없다.
+
+**D3 — 마우스 망막 SR 비교용**
+
+1배(`One time`, 1000×450) · 2배(`Two time`, 500×450) · 4배(`Four time`, 250×450) 다운샘플 조건별로 동일 장면을 저장한다. 각 조건 폴더에 BM3D+Bicubic 및 SBSDI 원저자 결과(`SBSDI_3D.tif`)가 포함되어 있어 SR 알고리즘 직접 비교에 활용할 수 있다.
 
 ### 구성 세트
 
