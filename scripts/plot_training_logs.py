@@ -166,6 +166,22 @@ def main() -> None:
         "Step 10: NAFNet lr=1e-4 6-fold CV",
     )
 
+    # Step 11: NAFNet + Edge Loss (lambda=0.5, SOBEL_MAX+clamp)
+    print("\n[Step 11] NAFNet Edge Loss lambda=0.5")
+    plot_kfold(
+        RESULTS / "11_nafnet_edge" / "metrics",
+        RESULTS / "11_nafnet_edge" / "metrics",
+        "Step 11: NAFNet EdgeLoss lambda=0.5",
+    )
+
+    # Step 12: NAFNet + Edge Loss + Frequency Loss
+    print("\n[Step 12] NAFNet Edge+Freq Loss")
+    plot_kfold(
+        RESULTS / "12_nafnet_freq" / "metrics",
+        RESULTS / "12_nafnet_freq" / "metrics",
+        "Step 12: NAFNet EdgeLoss+FreqLoss",
+    )
+
     print("\nDone.")
 
 

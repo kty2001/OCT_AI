@@ -22,6 +22,8 @@ OCT(Optical Coherence Tomography)를 활용한 치주질환 탐지·예측 연�
 | 8단계 | NAFNet 백본 6-fold CV (width=32, from scratch) | 완료 — DnCNN/U-Net과 동등, 데이터 병목 재확인 |
 | 9단계 | 다중 노이즈 재실현 증강 (K=4) + NAFNet 6-fold CV | 완료 — PSNR/SSIM 소폭 향상 (+0.24 dB) |
 | 10단계 | NAFNet lr=1e-4 재실험 (lr 영향 검증) | 완료 — lr=1e-3 대비 오히려 성능 하락, 데이터 병목 재확인 |
+| 11단계 | NAFNet + Edge Loss (Sobel, λ=0.5) 손실 함수 개선 | 완료 — CNR 소폭 향상 (+0.003), 데이터 병목이 한계 |
+| 12단계 | NAFNet + Edge Loss + Frequency Loss 조합 | 완료 — CNR 오히려 하락, 손실 함수 개선 한계 확인 |
 
 ---
 
@@ -471,6 +473,77 @@ uv run python scripts/08_nafnet/run_nafnet.py --lr 1e-4 --batch-size 48 --result
 
 ---
 
+## 11단계: NAFNet + Edge Loss (손실 함수 개선) (완료)
+
+CNR SRAD 미달 문제를 해소하기 위해 Sobel 기반 Edge Loss를 추가. 6회 시도를 통해 안정적인 정규화 방식을 확립했다.
+
+- **스크립트**: `scripts/08_nafnet/run_nafnet.py`
+- **결과**: `results/11_nafnet_edge/`
+
+### Edge Loss 정규화 시도 과정
+
+| 시도 | 정규화 | λ | 결과 |
+|------|-------|---|------|
+| 1 | 없음 | 0.1 | Fold 4~6 발산 — Sobel 스케일 과대 |
+| 2 | 없음 | 0.01 | 안정, 효과 없음 — 기여 0.8% 미만 |
+| 3 | per-batch mean 나눔 | 0.1 | 전 fold 발산 — mean으로 나누면 값 20배 증폭 |
+| 4 | SOBEL_MAX(11.314) 나눔 | 0.1 | 안정, 효과 없음 — 기여 여전히 작음 |
+| 5 | SOBEL_MAX 나눔 | 1.0 | Fold 2, 4 발산 — fold마다 edge 스케일 달라 불안정 |
+| **6** | **SOBEL_MAX + clamp(0,1)** | **0.5** | **전 fold 안정, CNR +0.003** |
+
+### 최종 손실 함수
+
+```
+Loss = L1 + 0.1×(1-SSIM) + 0.5×EdgeLoss
+EdgeLoss = L1(clamp(Sobel(pred)/11.314, 0,1), clamp(Sobel(clean)/11.314, 0,1))
+```
+
+### 결과 (SBSDI D1, 18쌍 6-fold 평균)
+
+| 방법 | PSNR (dB) | SSIM | CNR |
+|------|-----------|------|-----|
+| SRAD (베이스라인) | 27.50 ± 1.98 | 0.652 ± 0.023 | **1.220 ± 0.121** |
+| 8단계 NAFNet (기준) | **28.11 ± 2.26** | **0.6743 ± 0.029** | 1.183 ± 0.120 |
+| **11단계 NAFNet + EdgeLoss** | 28.06 ± 2.08 | 0.6699 ± 0.027 | **1.186 ± 0.116** |
+
+- CNR 1.183 → 1.186 (+0.003): 개선 방향은 맞으나 ±0.116 std 대비 통계적 유의성 없음
+- PSNR·SSIM은 소폭 하락 — edge 보존 강조가 픽셀 정확도를 미세하게 희생
+- **결론**: 손실 함수 개선의 방향은 확인했으나 데이터 18쌍 병목이 CNR 향상의 상한을 결정. 데이터 확보 없이는 loss 튜닝 효과가 noise 수준에 그침
+
+실행:
+```bash
+uv run python scripts/08_nafnet/run_nafnet.py --lambda-edge 0.5 --seed 42 --results-dir results/11_nafnet_edge
+```
+
+---
+
+## 12단계: NAFNet + Edge Loss + Frequency Loss (완료)
+
+11단계 Edge Loss에 FFT 기반 Frequency Loss를 추가해 고주파 구조 보존 효과를 검증.
+
+- **스크립트**: `scripts/08_nafnet/run_nafnet.py`
+- **결과**: `results/12_nafnet_freq/`
+
+```
+Loss = L1 + 0.1×(1-SSIM) + 0.5×EdgeLoss + 0.1×FreqLoss
+FreqLoss = L1(log1p(|rfft2(pred)|), log1p(|rfft2(clean)|))
+```
+
+| 방법 | PSNR | SSIM | CNR |
+|------|------|------|-----|
+| 8단계 baseline | 28.11 ± 2.26 | 0.6743 ± 0.029 | 1.183 ± 0.120 |
+| 11단계 +Edge | 28.06 ± 2.08 | 0.6699 ± 0.027 | **1.186 ± 0.116** |
+| **12단계 +Edge+Freq** | 28.05 ± 2.03 | 0.6683 ± 0.028 | 1.182 ± 0.120 |
+
+**결과**: Frequency Loss 추가 시 CNR이 1.186 → 1.182로 오히려 하락. Edge Loss가 경계 spatial gradient를 직접 최적화하는 반면, Frequency Loss는 전체 스펙트럼 차이를 페널티해 CNR과 무관한 성분에 gradient를 분산시켜 두 항이 충돌. **손실 함수 개선의 최선은 Edge Loss 단독(11단계)이며, 추가 조합은 효과 없음.**
+
+실행:
+```bash
+uv run python scripts/08_nafnet/run_nafnet.py --lambda-edge 0.5 --lambda-freq 0.1 --seed 42 --results-dir results/12_nafnet_freq
+```
+
+---
+
 ## 종합 결과 비교 (SBSDI D1, 18쌍 평균)
 
 | 방법 | 유형 | PSNR (dB) | SSIM | CNR | SRAD 대비 |
@@ -487,6 +560,8 @@ uv run python scripts/08_nafnet/run_nafnet.py --lr 1e-4 --batch-size 48 --result
 | 6-fold CV NAFNet (width=32) | real clean GT | 28.11 ± 2.26 | 0.6743 ± 0.029 | **1.183 ± 0.120** | CNR 최고, 분산 최소 |
 | **NAFNet + Aug (K=4)** | real+aug clean GT | **28.35 ± 2.56** | **0.6832 ± 0.032** | 1.168 ± 0.121 | PSNR/SSIM 현재 최고 |
 | NAFNet lr=1e-4 (10단계) | real clean GT | 27.95 ± 2.11 | 0.6666 ± 0.026 | 1.191 ± 0.116 | lr 인하로 오히려 하락 |
+| NAFNet + EdgeLoss λ=0.5 (11단계) | real clean GT | 28.06 ± 2.08 | 0.6699 ± 0.027 | **1.186 ± 0.116** | CNR +0.003, 손실함수 최고 |
+| NAFNet + Edge+Freq (12단계) | real clean GT | 28.05 ± 2.03 | 0.6683 ± 0.028 | 1.182 ± 0.120 | Freq 추가로 오히려 하락 |
 | Real-ESRGAN x2 | SR(blind) | 27.30 ± 2.35 | 0.674 ± 0.034 | 1.121 ± 0.116 | SSIM만 초과 |
 | Real-ESRGAN x4 | SR(blind) | 27.57 ± 2.40 | 0.673 ± 0.034 | 1.166 ± 0.117 | PSNR+SSIM 초과 |
 
@@ -499,26 +574,30 @@ uv run python scripts/08_nafnet/run_nafnet.py --lr 1e-4 --batch-size 48 --result
 - CNR은 전통 방법 SRAD(1.220)를 어떤 AI 방법도 아직 초과하지 못함
 - 667K(DnCNN) ≈ 1.95M(U-Net) ≈ 17M(NAFNet) ≈ NAFNet+Aug(K=4 증강) — 데이터 병목이 근본 원인
 - **lr 조정 무효 (10단계)**: NAFNet lr=1e-4는 lr=1e-3 대비 PSNR -0.16 dB. lr=1e-3의 빠른 초기 수렴이 데이터 부족 환경에서 오히려 유리하게 작용. 하이퍼파라미터 튜닝의 한계 재확인
+- **Edge Loss 효과 미미 (11단계)**: SOBEL_MAX+clamp 정규화로 안정적 학습 확립. CNR 1.183 → 1.186 (+0.003)이나 std(±0.116) 대비 통계적 유의성 없음
+- **Frequency Loss 추가 역효과 (12단계)**: Edge+Freq 조합에서 CNR 1.186 → 1.182로 하락. 두 loss 항이 gradient 방향 충돌. **손실 함수 개선 실험 종료**
 
 **결론**
 
-real clean GT k-fold CV + early stopping으로 SRAD 초과 가능. 아키텍처 변경(DnCNN/U-Net/NAFNet), K=4 노이즈 재실현 증강, lr 조정 모두 근본 한계를 해소하지 못함. CNR 한계와 데이터 병목 해소를 위해서는 외부 real OCT 데이터 확보가 필요하다.
+real clean GT k-fold CV + early stopping으로 SRAD 초과 가능. 아키텍처 변경(DnCNN/U-Net/NAFNet), 데이터 증강(K=4), lr 조정, 손실 함수 개선(Edge+Freq) 모두 데이터 18쌍 병목 앞에서 근본 한계를 해소하지 못함. 다음 단계는 데이터 측면(Duke AMD SD-OCT, 외부 clean GT)으로 전환 필요.
 
 ---
 
 ## 향후 작업 방향
 
-8단계까지의 실험으로 **데이터 크기(18쌍)가 유일한 병목**임이 확인됐다. 아키텍처를 바꿔도 PSNR 차이 0.08 dB 이내이므로, 이후 접근은 데이터 측면에 집중해야 한다.
+10단계까지의 실험으로 **아키텍처 교체·lr 조정·데이터 증강 모두 근본 한계를 해소하지 못함**이 확인됐다. 미해결 과제는 CNR(SRAD 미달)과 데이터 병목(18쌍)이며, 각각에 대한 접근이 필요하다.
 
-| 우선순위 | 방향 | 기대 효과 | 비고 |
-|---------|------|---------|------|
-| 1 | **데이터 증강 강화** (9단계 완료) | PSNR +0.24 dB 확인 — 추가 증강 가능 | elastic deformation, mixup, TTA |
-| 2 | **손실 함수 개선** | CNR 향상 (현재 SRAD 미달 유일 지표) | frequency loss, CNR-aware 항 추가 |
-| 3 | **외부 OCT 데이터 추가** | 데이터 병목 해소, 큰 성능 향상 기대 | clean GT 보유 데이터셋 필요 |
-| 4 | **치주 OCT 데이터 확보** | 실제 타겟 도메인 적용 | 동일 위치 ~40회 반복 촬영 → 픽셀 평균으로 clean GT 생성 (SBSDI D1 방식). 교수님과 촬영 프로토콜 협의 필요 |
-| 장기 | **Super-Resolution** | 해상도 향상 + 노이즈 제거 동시 | 스페클 제거 완성 후 적용 |
+| 우선순위 | 방향 | 비용 | 기대 효과 |
+|---------|------|------|---------|
+| 1 | **손실 함수 개선** (Edge Loss 완료, Frequency loss 미시도) | 낮음 | Edge Loss CNR +0.003 확인 — Frequency loss 추가 시도 가능하나 데이터 병목이 상한 |
+| 2 | **TTA (Test-Time Augmentation)** | 낮음 | 추가 학습 없이 fold 간 분산(std 2.56) 감소 |
+| 3 | **Duke AMD SD-OCT + N2N 자기지도** | 중간 | 38,400 B-scans로 다양성 확보, 직접 다운로드 가능 |
+| 4 | **외부 clean GT 데이터셋 접근 재시도** | 중간 | PKU37(37쌍), Sub2Full vis-OCT 저자 컨택 |
+| 5 | **Diffusion 기반 방법 (GARD 등)** | 높음 | 최고 복원 품질, OCT 스페클 Gamma 분포 직접 모델링 |
+| 6 | **치주 OCT 직접 수집** | 매우 높음 | 실제 타겟 도메인 — 교수님과 촬영 프로토콜 협의 필요 |
+| 장기 | **Joint Denoising + SR** | 높음 | 스페클 제거 완성 후 Real-ESRGAN 파이프라인 결합 |
 
-> 상세 분석은 `results/result_description.md` 향후 작업 방향 섹션 참조.
+> 상세 분석 및 손실 함수 구현 계획은 `results/result_description.md` 향후 작업 방향 섹션 참조.
 
 ---
 

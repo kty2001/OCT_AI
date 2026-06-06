@@ -88,6 +88,56 @@ class SSIMLoss(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Edge Loss (Sobel)
+# ---------------------------------------------------------------------------
+
+class EdgeLoss(nn.Module):
+    """Sobel edge loss normalized by theoretical maximum Sobel magnitude.
+
+    For images in [0, 1], the maximum Sobel magnitude is sqrt(8^2 + 8^2) ~= 11.3.
+    Dividing by SOBEL_MAX bounds the normalized edge values to [0, ~1],
+    keeping edge_loss on the same scale as pixel L1 loss and making
+    lambda_edge directly comparable to ssim_lambda.
+    """
+    SOBEL_MAX = 11.314  # sqrt(8^2 + 8^2), theoretical max for unit-contrast images
+
+    def __init__(self):
+        super().__init__()
+        kx = torch.tensor([[[[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]]], dtype=torch.float32)
+        ky = torch.tensor([[[[-1, -2, -1], [0, 0, 0], [1, 2, 1]]]], dtype=torch.float32)
+        self.register_buffer("kx", kx)
+        self.register_buffer("ky", ky)
+
+    def _edge(self, x: torch.Tensor) -> torch.Tensor:
+        ex = F.conv2d(x, self.kx, padding=1)
+        ey = F.conv2d(x, self.ky, padding=1)
+        return torch.sqrt(ex ** 2 + ey ** 2 + 1e-8)
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        edge_pred   = (self._edge(pred)   / self.SOBEL_MAX).clamp(0.0, 1.0)
+        edge_target = (self._edge(target) / self.SOBEL_MAX).clamp(0.0, 1.0)
+        return F.l1_loss(edge_pred, edge_target)
+
+
+# ---------------------------------------------------------------------------
+# Frequency Loss (FFT)
+# ---------------------------------------------------------------------------
+
+class FreqLoss(nn.Module):
+    """FFT amplitude loss with log1p compression.
+
+    Uses rfft2 (real FFT, half spectrum) with ortho normalization.
+    log1p(|FFT|) compresses the wide dynamic range of frequency amplitudes,
+    preventing the DC component from dominating and keeping the loss
+    on a stable scale comparable to pixel L1.
+    """
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        pred_amp   = torch.log1p(torch.abs(torch.fft.rfft2(pred,   norm="ortho")))
+        target_amp = torch.log1p(torch.abs(torch.fft.rfft2(target, norm="ortho")))
+        return F.l1_loss(pred_amp, target_amp)
+
+
+# ---------------------------------------------------------------------------
 # 데이터셋
 # ---------------------------------------------------------------------------
 
@@ -194,6 +244,8 @@ def train_fold(fold: int, train_pairs: list,
     )
     l1_crit   = nn.L1Loss()
     ssim_crit = SSIMLoss().to(device)
+    edge_crit = EdgeLoss().to(device) if args.lambda_edge > 0 else None
+    freq_crit = FreqLoss().to(device) if args.lambda_freq > 0 else None
 
     log_records  = []
     best_score   = -float("inf")
@@ -208,6 +260,10 @@ def train_fold(fold: int, train_pairs: list,
             optimizer.zero_grad()
             pred = model(noisy).clamp(0.0, 1.0)
             loss = l1_crit(pred, clean) + args.ssim_lambda * ssim_crit(pred, clean)
+            if edge_crit is not None:
+                loss = loss + args.lambda_edge * edge_crit(pred, clean)
+            if freq_crit is not None:
+                loss = loss + args.lambda_freq * freq_crit(pred, clean)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
@@ -315,9 +371,21 @@ def _print_vram(device: torch.device):
 # 메인
 # ---------------------------------------------------------------------------
 
+def set_seed(seed: int) -> None:
+    import random
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
 def main():
     global RESULTS_DIR, CKPT_DIR, METRICS_DIR, IMAGES_DIR
     args = parse_args()
+
+    set_seed(args.seed)
 
     if args.results_dir:
         RESULTS_DIR = ROOT / args.results_dir
@@ -411,7 +479,7 @@ def parse_args():
                    help="디코더 각 스테이지 NAFBlock 수 (쉼표 구분)")
     # 학습
     p.add_argument("--epochs",     type=int,   default=500)
-    p.add_argument("--batch-size", type=int,   default=16,
+    p.add_argument("--batch-size", type=int,   default=48,
                    help="width=32 기준 권장값. width=64 이상이면 8로 낮출 것")
     p.add_argument("--lr",         type=float, default=1e-3)
     p.add_argument("--patch-size", type=int,   default=128)
@@ -424,6 +492,12 @@ def parse_args():
                    help="이 fold부터 학습 시작 (이전 fold는 기존 결과 재사용)")
     p.add_argument("--results-dir", type=str, default=None,
                    help="결과 저장 디렉토리 (ROOT 기준 상대 경로, 기본: results/08_nafnet)")
+    p.add_argument("--lambda-edge", type=float, default=0.0,
+                   help="Edge Loss (Sobel) 가중치 (기본: 0.0 = 비활성)")
+    p.add_argument("--lambda-freq", type=float, default=0.0,
+                   help="Frequency Loss (FFT log1p) 가중치 (기본: 0.0 = 비활성)")
+    p.add_argument("--seed", type=int, default=42,
+                   help="재현성을 위한 랜덤 시드 (기본: 42)")
     return p.parse_args()
 
 

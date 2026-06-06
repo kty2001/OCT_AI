@@ -815,6 +815,8 @@ uv run python scripts/08_nafnet/run_nafnet.py --lr 1e-4 --batch-size 48 --result
 | 8단계 (NAFNet-32, ES) | 28.11 +- 2.26 | 0.6743 +- 0.029 | **1.183 +- 0.120** | from scratch, CNR 최고 |
 | **9단계 (NAFNet+Aug, K=4)** | **28.35 +- 2.56** | **0.6832 +- 0.032** | 1.168 +- 0.121 | 증강 5배, PSNR/SSIM 최고 |
 | 10단계 (NAFNet lr=1e-4) | 27.95 +- 2.11 | 0.6666 +- 0.026 | 1.191 +- 0.116 | lr 인하로 오히려 하락, 데이터 병목 재확인 |
+| 11단계 (NAFNet + EdgeLoss λ=0.5) | 28.06 +- 2.08 | 0.6699 +- 0.027 | **1.186 +- 0.116** | CNR +0.003, 손실함수 최고 |
+| 12단계 (NAFNet + Edge+Freq) | 28.05 +- 2.03 | 0.6683 +- 0.028 | 1.182 +- 0.120 | Freq 추가로 오히려 하락, 손실함수 실험 종료 |
 
 ---
 
@@ -834,6 +836,125 @@ uv run python scripts/08_nafnet/run_nafnet.py --lr 1e-4 --batch-size 48 --result
 | 8단계 | NAFNet 백본 6-fold CV (width=32, from scratch) | 완료 — CNR 최고, 데이터 병목 재확인 |
 | 9단계 | 다중 노이즈 재실현 증강 (K=4) + NAFNet 6-fold CV | 완료 — PSNR/SSIM 소폭 향상, CNR 한계 미해소 |
 | 10단계 | NAFNet lr=1e-4 재실험 (lr 영향 검증) | 완료 — lr=1e-3 대비 오히려 성능 하락, 데이터 병목 재확인 |
+| 11단계 | NAFNet + Edge Loss (Sobel, λ=0.5) | 완료 — CNR +0.003, noise 수준, 데이터 병목이 상한 |
+| 12단계 | NAFNet + Edge Loss + Frequency Loss | 완료 — CNR 오히려 하락, 손실 함수 개선 실험 종료 |
+
+---
+
+## 11단계: NAFNet + Edge Loss (손실 함수 개선)
+
+### 개요
+
+CNR SRAD 미달(1.183 vs 1.220) 해소를 위해 Sobel 기반 Edge Loss 추가. 안정적인 정규화 방식 확립에 6회 시도가 필요했다.
+
+- **스크립트**: `scripts/08_nafnet/run_nafnet.py --lambda-edge 0.5 --seed 42`
+- **결과**: `results/11_nafnet_edge/`
+
+### Edge Loss 정규화 시도 과정
+
+| 시도 | 정규화 방식 | λ | 초기 loss | 결과 |
+|------|-----------|---|---------|------|
+| 1 | 없음 | 0.1 | 0.18~0.48 | Fold 4~6 발산 — Sobel 출력 최대 ~8, 스케일 과대 |
+| 2 | 없음 | 0.01 | 정상 | 안정, 효과 없음 — 기여 0.8% 미만 |
+| 3 | per-batch mean으로 나눔 | 0.1 | 0.57~0.72 | 전 fold 발산 — mean으로 나누면 값 20배 증폭 |
+| 4 | SOBEL_MAX(11.314)로 나눔 | 0.1 | 정상 | 안정, 효과 없음 — 정규화 후 기여 여전히 0.8% |
+| 5 | SOBEL_MAX로 나눔 | 1.0 | 0.17~0.47 | Fold 2, 4 발산 — fold별 edge 스케일 차이 |
+| **6** | **SOBEL_MAX + clamp(0,1)** | **0.5** | **정상** | **전 fold 안정, CNR +0.003** |
+
+**핵심 교훈**: Sobel 출력의 절대 스케일 변동성이 크기 때문에 고정 상수(SOBEL_MAX)와 clamp의 조합이 필수.
+
+### 최종 손실 함수
+
+```
+Loss = L1 + 0.1×(1-SSIM) + 0.5×EdgeLoss
+EdgeLoss = L1(clamp(Sobel(pred)/11.314, 0,1),
+               clamp(Sobel(clean)/11.314, 0,1))
+```
+
+### 폴드별 결과
+
+| Fold | 평가 쌍 | best val PSNR | best val SSIM | stopped epoch |
+|------|---------|--------------|--------------|--------------|
+| 1 | 1, 7, 13 | 28.1219 | 0.6732 | 42 |
+| 2 | 2, 8, 14 | 29.8980 | 0.6940 | 39 |
+| 3 | 3, 9, 15 | 26.8583 | 0.6562 | 33 |
+| 4 | 4, 10, 16 | 28.9409 | 0.6757 | 36 |
+| 5 | 5, 11, 17 | 26.4151 | 0.6530 | 32 |
+| 6 | 6, 12, 18 | 28.1293 | 0.6788 | 39 |
+
+### 성능 결과 (SBSDI D1, 18쌍 6-fold 평균)
+
+| 방법 | PSNR (dB) | SSIM | CNR |
+|------|-----------|------|-----|
+| SRAD (베이스라인) | 27.50 +- 1.98 | 0.652 +- 0.023 | **1.220 +- 0.121** |
+| 8단계 NAFNet (기준) | **28.11 +- 2.26** | **0.6743 +- 0.029** | 1.183 +- 0.120 |
+| **11단계 NAFNet + EdgeLoss** | 28.06 +- 2.08 | 0.6699 +- 0.027 | **1.186 +- 0.116** |
+
+### 분석
+
+- **CNR 1.183 → 1.186 (+0.003)**: 개선 방향은 확인. 단, std=0.116 대비 통계적 유의성 없음.
+- **PSNR·SSIM 소폭 하락**: edge 보존을 강조하는 gradient가 픽셀 정확도를 미세하게 희생.
+- **분산 감소**: std 2.26 → 2.08 (PSNR), 0.120 → 0.116 (CNR) — 학습 안정성은 향상.
+- **근본 한계**: 손실 함수 개선이 올바른 방향이나 데이터 18쌍이 CNR 향상의 상한을 결정. 더 많은 데이터 없이는 loss 튜닝만으로 SRAD CNR(1.220) 초과 어렵다.
+
+### 재실행 명령
+
+```bash
+uv run python scripts/08_nafnet/run_nafnet.py --lambda-edge 0.5 --seed 42 --results-dir results/11_nafnet_edge
+```
+
+---
+
+## 12단계: NAFNet + Edge Loss + Frequency Loss
+
+### 개요
+
+11단계 Edge Loss(λ=0.5)에 FFT 기반 Frequency Loss(λ=0.1)를 추가해 고주파 구조 보존 효과 검증.
+
+- **스크립트**: `scripts/08_nafnet/run_nafnet.py --lambda-edge 0.5 --lambda-freq 0.1 --seed 42`
+- **결과**: `results/12_nafnet_freq/`
+
+### 최종 손실 함수
+
+```
+Loss = L1 + 0.1×(1-SSIM) + 0.5×EdgeLoss + 0.1×FreqLoss
+FreqLoss = L1(log1p(|rfft2(pred, norm="ortho")|),
+               log1p(|rfft2(clean, norm="ortho")|))
+```
+
+`rfft2` (실수 FFT, 절반 스펙트럼) + `log1p` 압축으로 DC 성분 지배 방지, [0, ~4] 범위 안정화.
+
+### 폴드별 결과
+
+| Fold | 평가 쌍 | best val PSNR | best val SSIM | stopped epoch |
+|------|---------|--------------|--------------|--------------|
+| 1 | 1, 7, 13 | 28.1040 | 0.6733 | 42 |
+| 2 | 2, 8, 14 | 29.8094 | 0.6922 | 39 |
+| 3 | 3, 9, 15 | 26.8660 | 0.6565 | 33 |
+| 4 | 4, 10, 16 | 28.9951 | 0.6762 | 38 |
+| 5 | 5, 11, 17 | 26.5326 | 0.6541 | 32 |
+| 6 | 6, 12, 18 | 28.0570 | 0.6775 | 39 |
+
+### 성능 결과 (SBSDI D1, 18쌍 6-fold 평균)
+
+| 방법 | PSNR (dB) | SSIM | CNR |
+|------|-----------|------|-----|
+| 8단계 baseline | 28.11 +- 2.26 | 0.6743 +- 0.029 | 1.183 +- 0.120 |
+| 11단계 +Edge λ=0.5 | 28.06 +- 2.08 | 0.6699 +- 0.027 | **1.186 +- 0.116** |
+| **12단계 +Edge+Freq** | 28.05 +- 2.03 | 0.6683 +- 0.028 | 1.182 +- 0.120 |
+
+### 분석
+
+- **CNR 1.186 → 1.182 (하락)**: Frequency Loss 추가가 오히려 역효과.
+- **원인**: Edge Loss는 경계의 spatial gradient를 직접 최적화해 CNR에 직결. Frequency Loss는 저주파 포함 전체 스펙트럼 차이를 페널티해 CNR과 무관한 성분에도 gradient를 분산. 두 항이 충돌.
+- **PSNR std 감소**: 2.26 → 2.08 → 2.03으로 계속 줄어드는 것은 긍정적이나 통계적 유의성 없음.
+- **손실 함수 개선 실험 종료**: Edge Loss 단독(11단계, CNR 1.186)이 최선. 추가 loss 조합은 효과 없음.
+
+### 재실행 명령
+
+```bash
+uv run python scripts/08_nafnet/run_nafnet.py --lambda-edge 0.5 --lambda-freq 0.1 --seed 42 --results-dir results/12_nafnet_freq
+```
 
 ---
 
@@ -841,138 +962,146 @@ uv run python scripts/08_nafnet/run_nafnet.py --lr 1e-4 --batch-size 48 --result
 
 ### 실험 총괄 결론
 
-8단계까지의 실험에서 도출된 핵심 사실:
+12단계까지의 실험에서 도출된 핵심 사실:
 
-1. **데이터가 주된 병목**: U-Net(1.95M) / DnCNN(667K) / NAFNet(17M) 모두 PSNR 28.1~28.2 dB로 수렴. K=4 재실현 증강으로 28.35 dB까지 향상됐으나 효과는 소폭(+0.24 dB). 더 다양한 실제 OCT 데이터가 필요.
+1. **데이터가 주된 병목**: U-Net(1.95M) / DnCNN(667K) / NAFNet(17M) 모두 PSNR 28.1~28.2 dB로 수렴. K=4 재실현 증강으로 28.35 dB까지 향상됐으나 효과는 소폭(+0.24 dB). lr 조정(1e-4)도 오히려 성능 하락(-0.16 dB). 더 다양한 실제 OCT 데이터가 필요.
 2. **clean GT가 결정적**: N2N(noisy 타겟, loss floor 0.184) → k-fold CV(clean GT, loss floor 0.048)로 전환하자 PSNR이 26.84 → 28.19 dB로 도약.
-3. **CNR 한계**: 어떤 AI 방법도 SRAD CNR(1.220)을 초과하지 못함. 현재 최고 NAFNet 1.183.
+3. **CNR 한계**: 어떤 AI 방법도 SRAD CNR(1.220)을 초과하지 못함. 손실 함수 개선(Edge Loss) 최고 1.186, 여전히 미달.
 4. **합성 데이터 한계 확인**: 합성 노이즈(Gamma) 지도학습 PSNR 22.43 — 실제 OCT 스페클과의 도메인 갭이 모든 학습을 무효화.
+5. **하이퍼파라미터·손실함수 튜닝 한계**: 아키텍처·lr·배치·증강·Edge Loss·Freq Loss 모두 18쌍 데이터 한계 앞에서 효과 noise 수준. 손실함수 실험 종료.
 
 ### 개선 방향 상세 분석
 
-#### 방향 1 — 데이터 증강 강화 (진행 중 / 부분 완료)
+#### 방향 1 — 손실 함수 개선 (우선순위: 1순위, 비용: 낮음)
 
-**완료**: K=4 다중 노이즈 재실현 (9단계) — PSNR +0.24 dB, SSIM +0.009.
-적용 중: H/V flip, rot90.
-추가 가능한 공간적 증강:
+**목표**: CNR SRAD(1.220) 초과. 현재 최고 1.191로 0.029 차이.
 
-| 증강 | 기대 효과 | 난이도 |
-|------|---------|-------|
-| Elastic deformation | fold 간 분산 감소 | 낮음 |
-| Random brightness/contrast | 조도 변화 대응 | 낮음 |
-| Mixup (noisy-clean 쌍 간) | 결정 경계 부드럽게 | 낮음 |
-| Test-Time Augmentation (TTA) | 추론 시 분산 감소 | 낮음 |
-| CutMix | 지역별 노이즈 패턴 다양화 | 중간 |
+**문제 분석**
 
-9단계 결과: 노이즈 재실현 증강의 효과는 PSNR +0.24 dB로 제한적. CNR 한계는 공간적 증강으로도 해소 어려울 것으로 예상.
+현재 손실: `Loss = L1(pred, clean) + 0.1 × (1 - SSIM(pred, clean))`
 
-#### 방향 2 — 손실 함수 개선 (우선순위: 높음, 비용: 낮음)
+- L1은 모든 픽셀을 동등하게 취급 → 조직 경계 픽셀과 내부 픽셀을 구별하지 않음
+- SSIM은 11×11 윈도 기반 지역 유사도 → 전역 경계 구조를 간접적으로만 반영
+- CNR = |μ_signal - μ_bg| / √(σ²_signal + σ²_bg) 는 경계 양쪽 강도 차이를 직접 측정하는데, 현재 손실에는 이를 직접 최적화하는 항이 없음
 
-CNR이 SRAD(1.220) 대비 현재 최고 1.183으로 미달 중. CNR은 조직 경계 대비를 측정하므로, 경계 보존에 특화된 손실이 필요.
+**방안 A — Edge Loss (Sobel, 1순위 추천)**
 
-| 손실 항목 | 내용 | CNR 기대 효과 |
-|----------|------|-------------|
-| Edge loss (Sobel) | 경계 픽셀 가중치 강화 | 직접적 CNR 향상 |
-| Frequency loss (FFT) | 고주파 성분 보존 | 구조 선명도 향상 |
-| Perceptual loss (VGG) | 구조 유사성 강화 | 간접적 CNR 향상 |
-| CNR-aware loss | ROI 기반 대비 직접 최적화 | 가장 직접적이나 구현 복잡 |
+Sobel 필터로 경계 맵을 추출해 예측과 정답의 경계 구조를 직접 비교.
 
-현재 L1 + 0.1*(1-SSIM) 조합에 Edge loss 또는 Frequency loss 항을 추가하는 것이 가장 간단하고 효과적.
+```python
+import torch.nn.functional as F
 
-#### 방향 3 — 외부 OCT 데이터 추가 (우선순위: 높음, 비용: 높음)
+def sobel_edge(x: torch.Tensor) -> torch.Tensor:
+    kx = torch.tensor([[[-1,0,1],[-2,0,2],[-1,0,1]]],
+                      dtype=x.dtype, device=x.device).unsqueeze(0)
+    ky = torch.tensor([[[-1,-2,-1],[0,0,0],[1,2,2]]],
+                      dtype=x.dtype, device=x.device).unsqueeze(0)
+    ex = F.conv2d(x, kx, padding=1)
+    ey = F.conv2d(x, ky, padding=1)
+    return torch.sqrt(ex**2 + ey**2 + 1e-8)
 
-18쌍 → 50쌍 이상으로 늘어나면 아키텍처 차이가 의미를 가지기 시작할 것으로 예상.
-clean GT 보유 OCT 데이터셋:
-
-| 데이터셋 | 쌍 수 | 접근 방법 | 상태 |
-|---------|------|---------|------|
-| PKU37 | 37쌍 | 알리바바 클라우드 계정 | 접근 실패 |
-| RETOUCH | 112 볼륨 | Grand Challenge 계정 | 접근 실패 |
-| Sub2Full vis-OCT | 미공개 | 저자 컨택 | 미시도 |
-| ODTiD | 242장 | OPENICPSR 계정 | 접근 실패 |
-
-계정 발급 재시도 또는 저자 직접 컨택이 현실적인 방법.
-
-**Duke University Sina Farsiu 연구실 (people.duke.edu/~sf59) 탐색 결과 (2026-06-01)**
-
-| 데이터셋 | 규모 | clean GT | 접근 | 비고 |
-|---------|------|---------|------|------|
-| SBSDI (Fang TMI 2013) | D1 18쌍 + D2 39세트 + D3 마우스 1세트 | D1만 있음 | 이미 보유 | D3는 마우스 망막, GT 없음 — 별도 배포 없음 |
-| AMD SD-OCT (RPEDC 2013) | 384명, 38,400 B-scans | 없음 | 직접 다운로드 가능 | AMD vs 정상 분류용. 합성 노이즈 추가 후 자기지도학습 데이터로만 활용 가능 |
-| Srinivasan BOE 2014 | 45명 (정상/AMD/DME 각 15명) | 없음 | 직접 다운로드 가능 | 소규모, 분류용 |
-| Chiu DME (BOE 2014) | 다수 | 없음 | 직접 다운로드 가능 | 낭종 세그멘테이션용 |
-
-결론: Duke 페이지에서 clean GT 보유 데이터는 SBSDI D1뿐이며 이미 보유 중. 나머지 Duke 데이터셋은 합성 노이즈를 씌워 자기지도학습 데이터를 늘리는 용도로만 활용 가능.
-
-**SBSDI 패키지 내부 구조 확인 결과**
-
-보유 중인 패키지(`data/Final_Publication_2013_SBSDI/`)는 논문 D1~D3를 모두 포함한다:
-
-| 서브디렉토리 | SBSDI 논문 명칭 | 폴더 수 | 파일 구성 | clean GT |
-|------------|--------------|--------|---------|---------|
-| `For synthetic experiments/` | D1 | 18 | test.tif, average.tif, 1~4.tif | **있음** (average.tif) |
-| `For real experiments on Humans/` | D2 | 39 | test.tif, 1~4.tif | 없음 |
-| `For real experiments on Mouse/` | D3 | 3 (One/Two/Four time) | test.tif, 1~4.tif, 알고리즘 결과물 | 없음 |
-
-추가로 확보 가능한 새로운 clean GT 쌍은 이 패키지에 존재하지 않는다.
-
-**average.tif 생성 방법 분석 결과**
-
-SBSDI MATLAB 코드(`Demo_SBSDI.m`)에서 average.tif를 "High-SNR-High-Resolution averaged image"로 명시한다. 실제 생성 방법:
-
-```
-동일 위치 N회 반복 스캔: frame_1, frame_2, ..., frame_N
-    ↓ 픽셀별 평균
-  average.tif   ← clean GT
-  (frame_k 1장)
-  test.tif      ← noisy 입력
-  1~4.tif       ← 인접 공간 슬라이스 (다른 위치, 보조 채널 용도)
+def edge_loss(pred, clean):
+    return F.l1_loss(sobel_edge(pred), sobel_edge(clean))
 ```
 
-Dictionary 학습용 HH/LL 이미지 쌍 10개의 배경 영역 노이즈 비교로 N 추정:
+왜 CNR에 직접 효과적인가:
+- CNR 분자 |μ_signal - μ_bg|는 경계 양쪽 강도 차이
+- edge loss가 경계 위치에서 오차를 더 강하게 페널티 → 경계가 선명해지고 CNR 향상
+- 구현 단순, 추가 파라미터 없음
 
-| 기준 데이터 | HH(avg) 배경 std | LL(single) 배경 std | 추정 N |
-|------------|----------------|-------------------|--------|
-| HH2/LL2 | 4.35 | 27.26 | 39.2 |
-| HH3/LL3 | 4.36 | 27.17 | 38.8 |
-| HH6/LL6 | 4.29 | 26.91 | 39.3 |
-| HH9/LL9 | 4.51 | 26.47 | 34.5 |
-| HH10/LL10 | 4.24 | 26.29 | 38.4 |
+**방안 B — Frequency Loss (FFT)**
 
-배경 영역이 확실한 5개 쌍 기준 **N ≈ 35~40**으로 일관됨. 단일 프레임 대비 노이즈 표준편차는 1/√N ≈ 1/6.3배로 감소.
+주파수 도메인에서 진폭 스펙트럼을 비교해 고주파 성분(경계·세부 구조) 보존 최적화.
 
-**보유 데이터셋 clean GT 생성 가능 여부 분석**
+```python
+def frequency_loss(pred, clean):
+    pred_fft  = torch.fft.fft2(pred,  norm="ortho")
+    clean_fft = torch.fft.fft2(clean, norm="ortho")
+    return F.l1_loss(torch.abs(pred_fft), torch.abs(clean_fft))
+```
 
-GT 생성 요건: 동일 위치를 N회 반복 촬영한 프레임이 필요. 인접 슬라이스(다른 공간 위치)로는 불가.
-판별 기준: diff(frameA - frameB) std / frameA std — 같은 위치이면 구조 성분이 상쇄되어 0.77 수준, 다른 위치이면 1.0 전후.
+L1+SSIM이 놓치는 주기적 레이어 구조(OCT 특유의 반복 패턴)를 직접 보존. Edge loss 대비 구조 전반에 걸친 고주파 보존에 유리.
 
-| 데이터셋 | diff/frame std 비율 | 판단 | GT 생성 가능 |
-|---------|-------------------|------|------------|
-| SBSDI D1 (test vs average) | 0.771 | 동일 위치 반복 스캔 | 이미 GT 존재 |
-| SBSDI D2 (test vs 1~4.tif) | 1.07 | 인접 슬라이스 | 불가 |
-| SBSDI D3 (Mouse) | — | One/Two/Four time = 동일 데이터 다른 해상도 | 불가 |
-| AROI (24 patient, 128 B-scans/patient) | 0.86~1.31 | 3D 볼륨 순차 슬라이스 | 불가 |
-| Kermany OCT2017 | — | 환자별 다중 스캔이지만 해상도 혼재·세션 불일치 | 불가 |
-| MedSegBench | — | 세그멘테이션 전용, 단일 이미지 | 불가 |
+**조합 손실 (최종 제안)**
 
-결론: 현재 보유 데이터 중 clean GT를 추가 생성할 수 있는 데이터셋은 없다.
+```
+Loss = L1 + λ_ssim×(1-SSIM) + λ_edge×EdgeLoss + λ_freq×FreqLoss
+```
 
-#### 방향 4 — 치주 OCT 데이터 확보 시 clean GT 생성 프로토콜
+| 파라미터 | 초기값 | 탐색 범위 |
+|---------|-------|---------|
+| λ_ssim | 0.1 (현행) | 고정 |
+| λ_edge | 0.1 | [0.05, 0.5] |
+| λ_freq | 0.05 | [0.01, 0.1] |
 
-치주 OCT 데이터를 직접 수집하는 경우, 아래 프로토콜로 SBSDI D1과 동일한 방식의 noisy-clean 쌍을 생성할 수 있다:
+λ_edge만 먼저 추가해 CNR 변화를 확인하고, 효과가 있으면 λ_freq를 추가하는 순서로 진행 권장.
 
-1. **동일 위치 ~40회 반복 촬영** → 픽셀별 평균 → clean GT
-2. **단일 프레임 1장 저장** → noisy 입력
-3. **인접 슬라이스 4장** → 보조 채널 (선택)
+**12단계까지 실험 결과 반영 (손실 함수 개선 실험 종료)**:
+- Edge Loss(λ=0.5): CNR 1.183 → 1.186 (+0.003), 통계적 유의성 없음
+- Edge + Freq Loss: CNR 1.182 (baseline보다 낮음) — gradient 충돌로 역효과
+- **결론**: 손실 함수 개선은 데이터 병목 앞에서 noise 수준의 효과에 그침. 데이터 확보 없이는 추가 loss 조합이 무의미.
 
-N≈40의 근거: SBSDI D1 분석에서 배경 영역 노이즈 std 비율(HH/LL ≈ 1/6.3 → N ≈ 40). N회 평균 시 노이즈 표준편차 1/√N배 감소. N=40이면 단일 프레임 대비 노이즈 약 84% 제거.
+#### 방향 2 — TTA (Test-Time Augmentation, 우선순위: 2순위, 비용: 낮음)
 
-#### 방향 4 — 치주 OCT 데이터 확보 (우선순위: 높음, 비용: 매우 높음)
+추가 학습 없이 추론 시에만 적용. fold 간 std=2.56이라는 큰 분산을 줄이는 데 직접 효과적.
 
-최종 목표 도메인. 현재 모든 학습은 망막 OCT 기반으로, 치주 도메인 전이 성능은 미검증.
-- 촬영 프로토콜: 교수님과 협의 필요
-- 촬영 후 필요한 작업: 다중 프레임 평균으로 clean GT 생성, 현재 최고 모델로 전이학습 적용
+```python
+augments = [lambda x: x,
+            lambda x: torch.flip(x, [-1]),      # H flip
+            lambda x: torch.flip(x, [-2]),      # V flip
+            lambda x: torch.rot90(x, 1, [-2,-1])]
 
-#### 방향 5 — Super-Resolution (우선순위: 낮음, 장기)
+preds = [model(aug(noisy)) for aug in augments]
+# 역변환 후 평균
+final = mean([inv_aug(pred) for aug, pred in zip(augments, preds)])
+```
 
-스페클 제거 성능이 충분히 향상된 후 적용. Real-ESRGAN x4(PSNR 27.57)가 이미 SRAD를 소폭 초과하므로, 스페클 제거 + SR 파이프라인 조합이 가장 높은 최종 품질을 기대할 수 있음.
+#### 방향 3 — Duke AMD SD-OCT + N2N 자기지도 (우선순위: 3순위, 비용: 중간)
+
+직접 다운로드 가능한 384명 38,400 B-scans(clean GT 없음)에 합성 노이즈를 추가해 N2N 자기지도 데이터로 활용. 현재 SBSDI D2(39세트) 대비 1,000배 많은 다양성 확보 가능.
+
+절차: 다운로드 → 합성 노이즈(2단계 파이프라인 재사용) → SBSDI D2 + AMD 합산으로 N2N 재학습 → SBSDI D1 평가.
+
+#### 방향 4 — 외부 clean GT 데이터셋 접근 재시도 (우선순위: 4순위, 비용: 중간)
+
+| 데이터셋 | 쌍 수 | 방법 | 기대 효과 |
+|---------|------|------|---------|
+| PKU37 | 37쌍 | 알리바바 계정 재시도 | 데이터 2배 이상 증가 |
+| Sub2Full vis-OCT | 미공개 | 저자 직접 이메일 컨택 | 가장 유사한 설정 |
+| RETOUCH | 112 볼륨 | Grand Challenge 계정 재시도 | 대규모 |
+
+#### 방향 5 — Diffusion 기반 방법 (우선순위: 5순위, 비용: 높음)
+
+현재 기준 최고 복원 품질 계열. 데이터 부족 환경에서도 사전학습 모델 활용 가능.
+
+| 논문 | 핵심 |
+|------|------|
+| GARD (MICCAI 2025) | OCT 스페클 Gamma 분포를 Diffusion forward process에 직접 적용 |
+| Content-Preserving Diffusion (MICCAI 2023) | 비지도, 해부학적 구조 보존 |
+
+#### 방향 6 — 치주 OCT 데이터 직접 수집 (우선순위: 장기, 비용: 매우 높음)
+
+최종 목표 도메인. 촬영 프로토콜: 동일 위치 ~40회 반복 → 픽셀 평균 = clean GT (SBSDI D1 방식). 교수님과 협의 필요.
+
+#### 방향 7 — Joint Denoising + SR (우선순위: 장기)
+
+스페클 제거 성능이 충분히 향상된 후 Real-ESRGAN 파이프라인과 결합.
+
+#### 참고 — 데이터 확보 조사 결과 (2026-06-01)
+
+**보유 데이터 clean GT 추가 생성 불가 확인**
+
+| 데이터셋 | diff/frame std 비율 | 판단 |
+|---------|-------------------|------|
+| SBSDI D1 | 0.771 | 동일 위치 반복 스캔 — 이미 GT 존재 |
+| SBSDI D2 | 1.07 | 인접 슬라이스 — 불가 |
+| AROI | 0.86~1.31 | 3D 볼륨 순차 슬라이스 — 불가 |
+| Kermany OCT2017 | — | 단일 이미지 — 불가 |
+
+**Duke AMD SD-OCT (직접 다운로드 가능)**
+
+384명 38,400 B-scans, clean GT 없음. 합성 노이즈 추가 후 N2N 자기지도학습 데이터로 활용 가능(방향 3 참조).
+
+**치주 OCT 직접 수집 시 clean GT 생성 프로토콜**
+
+동일 위치 ~40회 반복 촬영 → 픽셀별 평균 = clean GT (SBSDI D1 방식). N=40이면 단일 프레임 대비 노이즈 약 84% 제거. 교수님과 촬영 프로토콜 협의 필요.
