@@ -817,6 +817,7 @@ uv run python scripts/08_nafnet/run_nafnet.py --lr 1e-4 --batch-size 48 --result
 | 10단계 (NAFNet lr=1e-4) | 27.95 +- 2.11 | 0.6666 +- 0.026 | 1.191 +- 0.116 | lr 인하로 오히려 하락, 데이터 병목 재확인 |
 | 11단계 (NAFNet + EdgeLoss λ=0.5) | 28.06 +- 2.08 | 0.6699 +- 0.027 | **1.186 +- 0.116** | CNR +0.003, 손실함수 최고 |
 | 12단계 (NAFNet + Edge+Freq) | 28.05 +- 2.03 | 0.6683 +- 0.028 | 1.182 +- 0.120 | Freq 추가로 오히려 하락, 손실함수 실험 종료 |
+| **13단계 (AROI pretrain→D1 finetune)** | 28.23 +- 2.49 | **0.6838 +- 0.029** | 1.177 +- 0.121 | SSIM 전체 최고, PSNR +0.12 vs scratch |
 
 ---
 
@@ -838,6 +839,7 @@ uv run python scripts/08_nafnet/run_nafnet.py --lr 1e-4 --batch-size 48 --result
 | 10단계 | NAFNet lr=1e-4 재실험 (lr 영향 검증) | 완료 — lr=1e-3 대비 오히려 성능 하락, 데이터 병목 재확인 |
 | 11단계 | NAFNet + Edge Loss (Sobel, λ=0.5) | 완료 — CNR +0.003, noise 수준, 데이터 병목이 상한 |
 | 12단계 | NAFNet + Edge Loss + Frequency Loss | 완료 — CNR 오히려 하락, 손실 함수 개선 실험 종료 |
+| 13단계 | AROI N2N 사전학습 → SBSDI D1 k-fold fine-tuning | 완료 — SSIM 0.6838 (전체 최고), PSNR +0.12 dB |
 
 ---
 
@@ -958,6 +960,80 @@ uv run python scripts/08_nafnet/run_nafnet.py --lambda-edge 0.5 --lambda-freq 0.
 
 ---
 
+## 13단계: AROI N2N 사전학습 → SBSDI D1 k-fold fine-tuning
+
+### 개요
+
+보유 데이터 AROI(24명 × 128장)의 인접 B-scan을 N2N 쌍으로 활용해 NAFNet을 사전학습 후 SBSDI D1 18쌍으로 fine-tuning. 외부 데이터 없이 기존 보유 데이터의 활용도를 극대화.
+
+### 사전학습 설정 (AROI N2N)
+
+- **스크립트**: `scripts/13_aroi_n2n/run_pretrain.py`
+- **결과**: `results/13_aroi_n2n/pretrain/`
+- Train: patient 1~20, 인접 N2N 쌍 2,540개 / Val: patient 21~24, 508쌍
+- Lazy loading + random crop: 4,096 samples/epoch, 85 steps/epoch
+- NAFNet width=32, L1 loss, lr=1e-3, batch=48, seed=42
+- Early stop: epoch 93, best val N2N loss=0.04305
+- D1 PSNR 모니터링 (epoch마다 10): 최고 **27.086** (epoch 50)
+
+| Epoch | D1 PSNR |
+|-------|---------|
+| 1 | 23.399 |
+| 10 | 26.544 |
+| 50 | **27.086** |
+| 93 (종료) | 25.843 |
+
+SBSDI D2 N2N(3단계-A, 26.84 dB)보다 사전학습만으로 +0.25 dB 높은 D1 PSNR 달성.
+
+### fine-tuning 설정 (SBSDI D1 k-fold)
+
+- **스크립트**: `scripts/08_nafnet/run_nafnet.py --pretrain-ckpt results/13_aroi_n2n/pretrain/best.pth`
+- **결과**: `results/13_aroi_n2n/finetune/`
+- lr=1e-4 (pre-train lr=1e-3 대비 낮춤), λ_edge=0.5, seed=42
+- 모든 fold epoch 31~34에서 수렴 (scratch 32~46보다 빠름)
+
+### 폴드별 결과
+
+| Fold | 평가 쌍 | best val PSNR | best val SSIM | stopped epoch | Epoch 1 val PSNR |
+|------|---------|--------------|--------------|--------------|-----------------|
+| 1 | 1, 7, 13 | 28.4775 | 0.6855 | 33 | 28.366 |
+| 2 | 2, 8, 14 | 30.2850 | 0.7092 | 33 | 29.901 |
+| 3 | 3, 9, 15 | 26.5972 | 0.6678 | 33 | 26.513 |
+| 4 | 4, 10, 16 | 29.3024 | 0.6880 | 31 | 29.302 |
+| 5 | 5, 11, 17 | 26.5026 | 0.6668 | 33 | 26.463 |
+| 6 | 6, 12, 18 | 28.2429 | 0.6904 | 34 | 28.163 |
+
+Epoch 1 val PSNR이 26~30 수준 — 사전학습이 좋은 초기 가중치를 제공함을 확인.
+
+### 성능 결과 (SBSDI D1, 18쌍 6-fold 평균)
+
+| 방법 | PSNR (dB) | SSIM | CNR |
+|------|-----------|------|-----|
+| SRAD (베이스라인) | 27.50 +- 1.98 | 0.652 +- 0.023 | **1.220 +- 0.121** |
+| 8단계 NAFNet (scratch) | 28.11 +- 2.26 | 0.6743 +- 0.029 | **1.183 +- 0.120** |
+| 9단계 NAFNet+Aug | **28.35 +- 2.56** | 0.6832 +- 0.032 | 1.168 +- 0.121 |
+| **13단계 AROI pretrain→finetune** | 28.23 +- 2.49 | **0.6838 +- 0.029** | 1.177 +- 0.121 |
+
+### 분석
+
+- **SSIM 0.6838**: 전체 방법 중 최고 — 사전학습이 OCT 구조적 특성 학습에 효과적
+- **PSNR 28.23**: scratch(28.11) 대비 +0.12 dB, NAFNet+Aug(28.35) 대비 -0.12 dB
+- **CNR 1.177**: scratch(1.183) 대비 소폭 하락 — AROI N2N이 smooth 출력을 선호하는 경향이 EdgeLoss 효과를 일부 상쇄
+- **빠른 수렴**: epoch 31~34 (scratch 32~46 대비 빠름) — 사전학습 초기화 효과
+- **결론**: AROI N2N 사전학습은 SSIM 향상에 유효. 더 많은 다양한 OCT 데이터로 사전학습하면 추가 향상 기대 가능
+
+### 재실행 명령
+
+```bash
+uv run python scripts/13_aroi_n2n/run_pretrain.py
+uv run python scripts/08_nafnet/run_nafnet.py \
+  --pretrain-ckpt results/13_aroi_n2n/pretrain/best.pth \
+  --lr 1e-4 --lambda-edge 0.5 --seed 42 \
+  --results-dir results/13_aroi_n2n/finetune
+```
+
+---
+
 ## 향후 작업 방향
 
 ### 실험 총괄 결론
@@ -969,6 +1045,7 @@ uv run python scripts/08_nafnet/run_nafnet.py --lambda-edge 0.5 --lambda-freq 0.
 3. **CNR 한계**: 어떤 AI 방법도 SRAD CNR(1.220)을 초과하지 못함. 손실 함수 개선(Edge Loss) 최고 1.186, 여전히 미달.
 4. **합성 데이터 한계 확인**: 합성 노이즈(Gamma) 지도학습 PSNR 22.43 — 실제 OCT 스페클과의 도메인 갭이 모든 학습을 무효화.
 5. **하이퍼파라미터·손실함수 튜닝 한계**: 아키텍처·lr·배치·증강·Edge Loss·Freq Loss 모두 18쌍 데이터 한계 앞에서 효과 noise 수준. 손실함수 실험 종료.
+6. **사전학습 효과 확인 (13단계)**: AROI N2N(3,048쌍) 사전학습 후 D1 fine-tuning으로 SSIM 0.6838 달성(전체 최고). 더 많은 OCT 데이터로 사전학습하면 추가 향상 기대.
 
 ### 개선 방향 상세 분석
 

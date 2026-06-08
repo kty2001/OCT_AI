@@ -230,6 +230,11 @@ def train_fold(fold: int, train_pairs: list,
         enc_blks=enc_blks, mid_blks=args.mid_blks, dec_blks=dec_blks,
     ).to(device)
 
+    if args.pretrain_ckpt and Path(args.pretrain_ckpt).exists():
+        model.load_state_dict(torch.load(args.pretrain_ckpt, map_location=device))
+        if fold == 1:
+            print(f"사전학습 가중치 로드: {args.pretrain_ckpt}")
+
     n_params = sum(p.numel() for p in model.parameters())
     if fold == 1:
         print(f"NAFNet: width={args.width}, enc={enc_blks}, mid={args.mid_blks}, "
@@ -387,6 +392,9 @@ def main():
 
     set_seed(args.seed)
 
+    if args.pretrain_ckpt and not Path(args.pretrain_ckpt).is_absolute():
+        args.pretrain_ckpt = str(ROOT / args.pretrain_ckpt)
+
     if args.results_dir:
         RESULTS_DIR = ROOT / args.results_dir
         CKPT_DIR    = RESULTS_DIR / "checkpoints"
@@ -496,6 +504,8 @@ def parse_args():
                    help="Edge Loss (Sobel) 가중치 (기본: 0.0 = 비활성)")
     p.add_argument("--lambda-freq", type=float, default=0.0,
                    help="Frequency Loss (FFT log1p) 가중치 (기본: 0.0 = 비활성)")
+    p.add_argument("--pretrain-ckpt", type=str, default=None,
+                   help="사전학습 가중치 경로 (ROOT 기준 상대 경로 또는 절대 경로)")
     p.add_argument("--seed", type=int, default=42,
                    help="재현성을 위한 랜덤 시드 (기본: 42)")
     return p.parse_args()

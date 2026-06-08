@@ -24,6 +24,7 @@ OCT(Optical Coherence Tomography)를 활용한 치주질환 탐지·예측 연�
 | 10단계 | NAFNet lr=1e-4 재실험 (lr 영향 검증) | 완료 — lr=1e-3 대비 오히려 성능 하락, 데이터 병목 재확인 |
 | 11단계 | NAFNet + Edge Loss (Sobel, λ=0.5) 손실 함수 개선 | 완료 — CNR 소폭 향상 (+0.003), 데이터 병목이 한계 |
 | 12단계 | NAFNet + Edge Loss + Frequency Loss 조합 | 완료 — CNR 오히려 하락, 손실 함수 개선 한계 확인 |
+| 13단계 | AROI N2N 사전학습 → SBSDI D1 k-fold fine-tuning | 완료 — SSIM 0.6838 (전체 최고), PSNR +0.12 dB |
 
 ---
 
@@ -544,6 +545,50 @@ uv run python scripts/08_nafnet/run_nafnet.py --lambda-edge 0.5 --lambda-freq 0.
 
 ---
 
+## 13단계: AROI N2N 사전학습 → SBSDI D1 k-fold fine-tuning (완료)
+
+보유 데이터(AROI 3,072장)를 활용해 인접 B-scan N2N으로 사전학습 후 SBSDI D1 18쌍으로 fine-tuning.
+
+### 사전학습 (AROI N2N)
+
+- **스크립트**: `scripts/13_aroi_n2n/run_pretrain.py`
+- **결과**: `results/13_aroi_n2n/pretrain/best.pth`
+- Train: patient 1~20, 인접 쌍 2,540개 / Val: patient 21~24, 508쌍
+- 데이터셋: lazy loading + random crop (4,096 samples/epoch, 85 steps/epoch)
+- Early stop epoch 93, best val N2N loss: 0.04305
+- D1 PSNR 모니터링 최고: **27.086** (epoch 50) — 3단계-A SBSDI D2 N2N(26.84) 초과
+
+### fine-tuning (SBSDI D1 k-fold)
+
+- **스크립트**: `scripts/08_nafnet/run_nafnet.py --pretrain-ckpt results/13_aroi_n2n/pretrain/best.pth`
+- **결과**: `results/13_aroi_n2n/finetune/`
+- lr=1e-4, λ_edge=0.5, seed=42, 모든 fold epoch 31~34 수렴
+
+| 방법 | PSNR | SSIM | CNR |
+|------|------|------|-----|
+| 8단계 NAFNet (scratch) | 28.11 ± 2.26 | 0.6743 ± 0.029 | **1.183 ± 0.120** |
+| 9단계 NAFNet+Aug | **28.35 ± 2.56** | 0.6832 ± 0.032 | 1.168 ± 0.121 |
+| **13단계 AROI pretrain→finetune** | 28.23 ± 2.49 | **0.6838 ± 0.029** | 1.177 ± 0.121 |
+
+- **SSIM 0.6838**: 전체 방법 중 최고
+- **PSNR +0.12 dB**: scratch(28.11) 대비 향상
+- Epoch 1 val PSNR이 28~30 수준으로 시작 — 사전학습 효과 확인
+- CNR은 scratch(1.183) 대비 소폭 하락 — AROI N2N이 smooth 출력을 학습해 경계 대비 미세 희생
+
+실행:
+```bash
+# 1단계: 사전학습
+uv run python scripts/13_aroi_n2n/run_pretrain.py
+
+# 2단계: fine-tuning
+uv run python scripts/08_nafnet/run_nafnet.py \
+  --pretrain-ckpt results/13_aroi_n2n/pretrain/best.pth \
+  --lr 1e-4 --lambda-edge 0.5 --seed 42 \
+  --results-dir results/13_aroi_n2n/finetune
+```
+
+---
+
 ## 종합 결과 비교 (SBSDI D1, 18쌍 평균)
 
 | 방법 | 유형 | PSNR (dB) | SSIM | CNR | SRAD 대비 |
@@ -562,15 +607,17 @@ uv run python scripts/08_nafnet/run_nafnet.py --lambda-edge 0.5 --lambda-freq 0.
 | NAFNet lr=1e-4 (10단계) | real clean GT | 27.95 ± 2.11 | 0.6666 ± 0.026 | 1.191 ± 0.116 | lr 인하로 오히려 하락 |
 | NAFNet + EdgeLoss λ=0.5 (11단계) | real clean GT | 28.06 ± 2.08 | 0.6699 ± 0.027 | **1.186 ± 0.116** | CNR +0.003, 손실함수 최고 |
 | NAFNet + Edge+Freq (12단계) | real clean GT | 28.05 ± 2.03 | 0.6683 ± 0.028 | 1.182 ± 0.120 | Freq 추가로 오히려 하락 |
+| **AROI pretrain→D1 finetune (13단계)** | N2N pretrain+real GT | 28.23 ± 2.49 | **0.6838 ± 0.029** | 1.177 ± 0.121 | SSIM 전체 최고, PSNR +0.12 |
 | Real-ESRGAN x2 | SR(blind) | 27.30 ± 2.35 | 0.674 ± 0.034 | 1.121 ± 0.116 | SSIM만 초과 |
 | Real-ESRGAN x4 | SR(blind) | 27.57 ± 2.40 | 0.673 ± 0.034 | 1.166 ± 0.117 | PSNR+SSIM 초과 |
 
 > Real-ESRGAN 지표는 SR 출력을 원본 해상도(450×900)로 다운스케일 후 clean reference와 비교한 값.
 
 **핵심 발견**
-- PSNR/SSIM 최고 (현재): **NAFNet+Aug — PSNR 28.35, SSIM 0.6832** — K=4 재실현 증강으로 소폭 향상
+- **SSIM 최고 (현재)**: **AROI pretrain→D1 finetune — SSIM 0.6838** (13단계)
+- **PSNR 최고 (현재)**: **NAFNet+Aug — PSNR 28.35** (9단계)
 - PSNR 최고 (증강 전): 6-fold CV U-Net (28.19 dB) — AI 방법 최초로 SRAD 초과
-- CNR 최고: **6-fold CV NAFNet (1.183)** — 증강 후에도 CNR은 소폭 하락(1.168)
+- CNR 최고: **6-fold CV NAFNet (1.183)** — 어떤 방법도 SRAD(1.220) 미달
 - CNR은 전통 방법 SRAD(1.220)를 어떤 AI 방법도 아직 초과하지 못함
 - 667K(DnCNN) ≈ 1.95M(U-Net) ≈ 17M(NAFNet) ≈ NAFNet+Aug(K=4 증강) — 데이터 병목이 근본 원인
 - **lr 조정 무효 (10단계)**: NAFNet lr=1e-4는 lr=1e-3 대비 PSNR -0.16 dB. lr=1e-3의 빠른 초기 수렴이 데이터 부족 환경에서 오히려 유리하게 작용. 하이퍼파라미터 튜닝의 한계 재확인

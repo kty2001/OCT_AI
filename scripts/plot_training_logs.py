@@ -182,7 +182,49 @@ def main() -> None:
         "Step 12: NAFNet EdgeLoss+FreqLoss",
     )
 
+    # Step 13-pre: AROI N2N pre-training
+    print("\n[Step 13-pre] AROI N2N Pre-training")
+    _plot_aroi_pretrain(RESULTS / "13_aroi_n2n" / "pretrain")
+
+    # Step 13-ft: D1 k-fold fine-tuning
+    print("\n[Step 13-ft] D1 Fine-tuning")
+    plot_kfold(
+        RESULTS / "13_aroi_n2n" / "finetune" / "metrics",
+        RESULTS / "13_aroi_n2n" / "finetune" / "metrics",
+        "Step 13: AROI pretrain -> D1 finetune",
+    )
+
     print("\nDone.")
+
+
+def _plot_aroi_pretrain(pretrain_dir: Path) -> None:
+    csv = pretrain_dir / "training_log.csv"
+    if not csv.exists():
+        print(f"  not found: {csv}")
+        return
+    df = pd.read_csv(csv)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 4))
+
+    axes[0].plot(df["epoch"], df["train_loss"], color="steelblue", linewidth=1.5, label="Train Loss")
+    axes[0].plot(df["epoch"], df["val_loss"],   color="tomato",    linewidth=1.5, linestyle="--", label="Val Loss")
+    axes[0].set_xlabel("Epoch")
+    axes[0].set_ylabel("N2N Loss (L1)")
+    axes[0].set_title("Step 13 Pre-train: AROI N2N - Loss")
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+
+    d1 = df.dropna(subset=["d1_psnr"])
+    axes[1].plot(d1["epoch"], d1["d1_psnr"], color="seagreen", linewidth=1.5, marker="o", markersize=4)
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylabel("SBSDI D1 PSNR (dB)")
+    axes[1].set_title("Step 13 Pre-train: AROI N2N - D1 PSNR Monitor")
+    axes[1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    out = pretrain_dir / "loss_curve.png"
+    save_fig(fig, out)
+    print(f"  저장: {out.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":
